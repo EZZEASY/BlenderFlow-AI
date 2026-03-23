@@ -8,10 +8,16 @@ bl_info = {
 }
 
 import bpy
+import sys
+import os
 import threading
 import asyncio
-import json
-import os
+
+# ─── 把内嵌的 vendor 目录加入 Python 搜索路径 ───
+_vendor_dir = os.path.join(os.path.dirname(__file__), "vendor")
+if _vendor_dir not in sys.path:
+    sys.path.insert(0, _vendor_dir)
+
 from . import ws_server
 from . import commands
 
@@ -19,6 +25,8 @@ from . import commands
 _server_thread = None
 _server_loop = None
 
+
+# ─── Operators & UI ───
 
 class BLENDERFLOW_OT_start_server(bpy.types.Operator):
     bl_idname = "blenderflow.start_server"
@@ -49,9 +57,15 @@ class BLENDERFLOW_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("blenderflow.start_server")
-        layout.operator("blenderflow.stop_server")
+        if _server_thread and _server_thread.is_alive():
+            layout.label(text="● Server Running", icon='CHECKMARK')
+            layout.operator("blenderflow.stop_server")
+        else:
+            layout.label(text="○ Server Stopped")
+            layout.operator("blenderflow.start_server")
 
+
+# ─── Server 管理 ───
 
 def start_server():
     global _server_thread, _server_loop
@@ -77,6 +91,8 @@ def stop_server():
     print("BlenderFlow: WebSocket server stopped")
 
 
+# ─── 注册 ───
+
 _classes = (
     BLENDERFLOW_OT_start_server,
     BLENDERFLOW_OT_stop_server,
@@ -88,7 +104,6 @@ def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
     commands.register()
-    # Auto-start server on addon load
     start_server()
 
 

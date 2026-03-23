@@ -9,6 +9,7 @@ Messages: JSON, see design doc for schema.
 
 import asyncio
 import json
+import os
 import bpy
 
 try:
@@ -71,22 +72,26 @@ async def handle_message(msg_type, msg, websocket):
         return None
 
     elif msg_type == "get_state":
-        # State must be read on main thread too
-        result = {}
-        event = asyncio.Event()
+        # Read state on main thread via shared dict + sleep
+        result = {"_done": False}
 
         def read_state():
             result.update(_get_state())
-            # Signal the async event from the main thread
-            asyncio.get_event_loop_policy()  # dummy to avoid import
-            event._loop = asyncio.get_event_loop()
+            result["_done"] = True
             return None
 
         _run_on_main_thread(read_state)
-        # Wait a bit for the timer to fire
-        await asyncio.sleep(0.1)
-        state = _get_state_safe()
-        return {"type": "state", **state}
+
+        # Wait for main thread timer to fire (up to 0.5s)
+        for _ in range(10):
+            await asyncio.sleep(0.05)
+            if result.get("_done"):
+                break
+
+        result.pop("_done", None)
+        if not result.get("mode"):
+            result = _get_state_safe()
+        return {"type": "state", **result}
 
     elif msg_type == "ai_prompt_request":
         _run_on_main_thread(lambda: _show_ai_prompt(websocket))
@@ -192,12 +197,8 @@ def _import_model(path, fmt):
     return None
 
 
-import os
-
-
 def _show_ai_prompt(websocket):
     """Show AI prompt dialog in Blender. Must run on main thread."""
-    # Use a simple invoke_props_dialog
     bpy.ops.blenderflow.ai_prompt_dialog('INVOKE_DEFAULT')
     return None
 

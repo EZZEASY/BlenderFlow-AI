@@ -76,6 +76,7 @@ namespace Loupedeck.BlenderFlowPlugin
 
                     case "ai_prompt_cancelled":
                         PluginLog.Info("AI prompt cancelled by user");
+                        OnBlenderStateChanged?.Invoke(); // Signals AIGenerateCommand to reset
                         break;
 
                     case "error":
@@ -94,17 +95,27 @@ namespace Loupedeck.BlenderFlowPlugin
         private void HandleAiPrompt(String prompt)
         {
             PluginLog.Info($"AI generating: {prompt}");
-            Task.Run(async () =>
-            {
-                AIService.OnCompleted += async (path) =>
-                {
-                    // Send import command to Blender
-                    var format = path.EndsWith(".glb") || path.EndsWith(".gltf") ? "gltf" : "obj";
-                    await BlenderConnection.SendImportModelAsync(path, format);
-                };
 
-                await AIService.GenerateModelAsync(prompt);
-            });
+            // Use a local handler to avoid accumulating persistent event subscriptions
+            Action<String> onCompleted = null;
+            onCompleted = async (path) =>
+            {
+                AIService.OnCompleted -= onCompleted;
+                var format = path.EndsWith(".glb") || path.EndsWith(".gltf") ? "gltf" : "obj";
+                await BlenderConnection.SendImportModelAsync(path, format);
+            };
+
+            Action<String> onFailed = null;
+            onFailed = (error) =>
+            {
+                AIService.OnCompleted -= onCompleted;
+                AIService.OnFailed -= onFailed;
+            };
+
+            AIService.OnCompleted += onCompleted;
+            AIService.OnFailed += onFailed;
+
+            Task.Run(async () => await AIService.GenerateModelAsync(prompt));
         }
     }
 }

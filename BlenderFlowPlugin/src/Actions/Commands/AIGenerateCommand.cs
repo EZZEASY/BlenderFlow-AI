@@ -37,12 +37,26 @@ namespace Loupedeck.BlenderFlowPlugin
             plugin.AIService.OnCompleted += OnCompleted;
             plugin.AIService.OnFailed += OnFailed;
 
+            // Listen for cancellation (prompt dialog dismissed)
+            plugin.OnBlenderStateChanged += OnStateChanged;
+
             // Send prompt request to Blender (shows dialog)
             Task.Run(async () => await plugin.BlenderConnection.SendAiPromptRequestAsync());
 
             _status = "waiting";
             this.ActionImageChanged();
             PluginLog.Info("AI Generate: prompt dialog requested");
+        }
+
+        private void OnStateChanged()
+        {
+            // If we're waiting for prompt and state changes, user may have cancelled
+            if (_status == "waiting")
+            {
+                _status = "idle";
+                UnsubscribeEvents();
+                this.ActionImageChanged();
+            }
         }
 
         private void OnProgressChanged(String status, Int32 percent)
@@ -80,6 +94,7 @@ namespace Loupedeck.BlenderFlowPlugin
             plugin.AIService.OnProgressChanged -= OnProgressChanged;
             plugin.AIService.OnCompleted -= OnCompleted;
             plugin.AIService.OnFailed -= OnFailed;
+            plugin.OnBlenderStateChanged -= OnStateChanged;
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
