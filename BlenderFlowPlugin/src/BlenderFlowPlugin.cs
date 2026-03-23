@@ -30,6 +30,11 @@ namespace Loupedeck.BlenderFlowPlugin
             BlenderConnection = new BlenderConnection();
             AIService = new AIService();
 
+            // Register haptic events
+            this.PluginEvents.AddEvent("aiGenerateComplete", "AI Complete", "AI model generation finished");
+            this.PluginEvents.AddEvent("modeSwitch", "Mode Switch", "Blender mode changed");
+            this.PluginEvents.AddEvent("aiGenerateFailed", "AI Failed", "AI generation error");
+
             BlenderConnection.OnMessageReceived += HandleBlenderMessage;
             BlenderConnection.OnConnected += () => PluginLog.Info("Blender connected");
             BlenderConnection.OnDisconnected += () => PluginLog.Info("Blender disconnected");
@@ -58,6 +63,7 @@ namespace Loupedeck.BlenderFlowPlugin
                     case "mode_changed":
                         CurrentMode = doc.RootElement.GetProperty("mode").GetString();
                         OnBlenderStateChanged?.Invoke();
+                        this.PluginEvents.RaiseEvent("modeSwitch");
                         break;
 
                     case "state":
@@ -103,6 +109,7 @@ namespace Loupedeck.BlenderFlowPlugin
                 AIService.OnCompleted -= onCompleted;
                 var format = path.EndsWith(".glb") || path.EndsWith(".gltf") ? "gltf" : "obj";
                 await BlenderConnection.SendImportModelAsync(path, format);
+                this.PluginEvents.RaiseEvent("aiGenerateComplete");
             };
 
             Action<String> onFailed = null;
@@ -110,6 +117,7 @@ namespace Loupedeck.BlenderFlowPlugin
             {
                 AIService.OnCompleted -= onCompleted;
                 AIService.OnFailed -= onFailed;
+                this.PluginEvents.RaiseEvent("aiGenerateFailed");
             };
 
             AIService.OnCompleted += onCompleted;

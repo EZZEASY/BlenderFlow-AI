@@ -1,0 +1,14 @@
+displayName: BlenderFlow AI
+description: Haptic feedback events for Blender workflow
+events:
+    - name: aiGenerateComplete
+      displayName: AI Generation Complete
+      description: Triggered when AI 3D model generation is finished
+
+    - name: modeSwitch
+      displayName: Mode Switched
+      description: Triggered when Blender mode changes
+
+    - name: aiGenerateFailed
+      displayName: AI Generation Failed
+      description: Triggered when AI generation encounters an error

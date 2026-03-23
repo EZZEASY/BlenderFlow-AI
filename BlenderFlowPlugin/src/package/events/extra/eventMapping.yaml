@@ -1,0 +1,10 @@
+haptics:
+    aiGenerateComplete:
+        DEFAULT: happy_alert
+        MX Master 4: happy_alert
+    modeSwitch:
+        DEFAULT: sharp_state_change
+        MX Master 4: sharp_state_change
+    aiGenerateFailed:
+        DEFAULT: sharp_collision
+        MX Master 4: sharp_collision

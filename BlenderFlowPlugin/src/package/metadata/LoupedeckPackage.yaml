@@ -15,8 +15,9 @@ supportedDevices:
 pluginCapabilities:
     - HasApplication
     - ActivatesApplication
+    - HasHapticMapping
 
-minimumLoupedeckVersion: 6.0
+minimumLoupedeckVersion: 6.2
 
 license: MIT
 licenseUrl: https://opensource.org/licenses/MIT
