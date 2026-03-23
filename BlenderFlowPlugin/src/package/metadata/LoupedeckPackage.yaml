@@ -1,0 +1,22 @@
+type: plugin4
+name: BlenderFlow
+displayName: BlenderFlow AI
+description: AI-powered Blender workflow controller for MX Creative Console
+pluginFileName: BlenderFlowPlugin.dll
+version: 1.0
+author: Leo L
+copyright: Copyright 2026 Leo L. All rights reserved.
+
+pluginFolderMac: bin
+
+supportedDevices:
+    - LoupedeckCtFamily
+
+pluginCapabilities:
+    - HasApplication
+    - ActivatesApplication
+
+minimumLoupedeckVersion: 6.0
+
+license: MIT
+licenseUrl: https://opensource.org/licenses/MIT
