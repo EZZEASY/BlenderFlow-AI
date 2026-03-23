@@ -1,6 +1,7 @@
 namespace Loupedeck.BlenderFlowPlugin
 {
     using System;
+    using System.Threading.Tasks;
 
     public class BlenderModeCommand : PluginDynamicCommand
     {
@@ -14,31 +15,58 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
-            // NOTE: Tab only cycles modes, it can't jump to a specific one.
-            // Ctrl+Tab opens the mode pie menu — closest we can get without WebSocket.
-            // TODO Layer 2: Use WebSocket to send bpy.ops.object.mode_set(mode='OBJECT') etc.
-            this.Plugin.ClientApplication.SendKeyboardShortcut(
-                VirtualKeyCode.Tab, ModifierKey.Command);
+            var plugin = (BlenderFlowPlugin)this.Plugin;
 
-            PluginLog.Info($"Mode switch requested: {actionParameter} (pie menu opened)");
+            // Prefer WebSocket for precise mode switching
+            if (plugin.BlenderConnection?.IsConnected == true)
+            {
+                var blenderMode = actionParameter switch
+                {
+                    "object" => "OBJECT",
+                    "edit" => "EDIT",
+                    "sculpt" => "SCULPT",
+                    _ => "OBJECT"
+                };
+
+                Task.Run(async () => await plugin.BlenderConnection.SendSetModeAsync(blenderMode));
+                PluginLog.Info($"Mode switch via WebSocket: {blenderMode}");
+            }
+            else
+            {
+                // Fallback: Cmd+Tab opens mode pie menu
+                this.Plugin.ClientApplication.SendKeyboardShortcut(
+                    VirtualKeyCode.Tab, ModifierKey.Command);
+                PluginLog.Info($"Mode switch via pie menu: {actionParameter}");
+            }
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
         {
-            var builder = new BitmapBuilder(imageSize);
+            using var builder = new BitmapBuilder(imageSize);
+            var plugin = this.Plugin as BlenderFlowPlugin;
+            var currentMode = plugin?.CurrentMode ?? "OBJECT";
+
+            // Highlight active mode
+            var isActive = actionParameter switch
+            {
+                "object" => currentMode == "OBJECT",
+                "edit" => currentMode.Contains("EDIT"),
+                "sculpt" => currentMode.Contains("SCULPT"),
+                _ => false
+            };
 
             switch (actionParameter)
             {
                 case "object":
-                    builder.Clear(new BitmapColor(234, 118, 0));
+                    builder.Clear(isActive ? new BitmapColor(234, 118, 0) : new BitmapColor(80, 40, 0));
                     builder.DrawText("Object\nMode", color: BitmapColor.White);
                     break;
                 case "edit":
-                    builder.Clear(new BitmapColor(0, 140, 200));
+                    builder.Clear(isActive ? new BitmapColor(0, 140, 200) : new BitmapColor(0, 50, 70));
                     builder.DrawText("Edit\nMode", color: BitmapColor.White);
                     break;
                 case "sculpt":
-                    builder.Clear(new BitmapColor(180, 60, 60));
+                    builder.Clear(isActive ? new BitmapColor(180, 60, 60) : new BitmapColor(60, 20, 20));
                     builder.DrawText("Sculpt\nMode", color: BitmapColor.White);
                     break;
                 default:

@@ -1,6 +1,7 @@
 namespace Loupedeck.BlenderFlowPlugin
 {
     using System;
+    using System.Threading.Tasks;
 
     public class BlenderToolCommand : PluginDynamicCommand
     {
@@ -14,14 +15,23 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
+            var plugin = (BlenderFlowPlugin)this.Plugin;
+
+            // Prefer WebSocket — avoids macOS modifier key issues
+            if (plugin.BlenderConnection?.IsConnected == true)
+            {
+                Task.Run(async () => await plugin.BlenderConnection.SendToolAsync(actionParameter));
+                PluginLog.Info($"Tool via WebSocket: {actionParameter}");
+                return;
+            }
+
+            // Fallback: keyboard shortcuts
             switch (actionParameter)
             {
                 case "extrude":
                     this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.KeyE);
                     break;
                 case "bevel":
-                    // macOS: Blender uses Cmd as primary modifier
-                    // TODO Layer 2: WebSocket fallback if modifier keys don't work
                     this.Plugin.ClientApplication.SendKeyboardShortcut(
                         VirtualKeyCode.KeyB, ModifierKey.Command);
                     break;
@@ -31,12 +41,12 @@ namespace Loupedeck.BlenderFlowPlugin
                     break;
             }
 
-            PluginLog.Info($"Tool executed: {actionParameter}");
+            PluginLog.Info($"Tool via shortcut: {actionParameter}");
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
         {
-            var builder = new BitmapBuilder(imageSize);
+            using var builder = new BitmapBuilder(imageSize);
             builder.Clear(new BitmapColor(60, 60, 60));
 
             switch (actionParameter)
