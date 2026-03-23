@@ -20,13 +20,14 @@ namespace Loupedeck.BlenderFlowPlugin
                     this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.KeyE);
                     break;
                 case "bevel":
-                    // NOTE: If modifier keys don't work on macOS, this will need WebSocket fallback
+                    // macOS: Blender uses Cmd as primary modifier
+                    // TODO Layer 2: WebSocket fallback if modifier keys don't work
                     this.Plugin.ClientApplication.SendKeyboardShortcut(
-                        VirtualKeyCode.KeyB, ModifierKey.Control);
+                        VirtualKeyCode.KeyB, ModifierKey.Command);
                     break;
                 case "loopcut":
                     this.Plugin.ClientApplication.SendKeyboardShortcut(
-                        VirtualKeyCode.KeyR, ModifierKey.Control);
+                        VirtualKeyCode.KeyR, ModifierKey.Command);
                     break;
             }
 

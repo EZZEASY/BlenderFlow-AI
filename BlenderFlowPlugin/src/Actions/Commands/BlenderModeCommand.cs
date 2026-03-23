@@ -14,21 +14,13 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
-            switch (actionParameter)
-            {
-                case "object":
-                    // Tab cycles modes; for Object mode specifically, use the pie menu
-                    this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.Tab);
-                    break;
-                case "edit":
-                    this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.Tab);
-                    break;
-                case "sculpt":
-                    this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.Tab);
-                    break;
-            }
+            // NOTE: Tab only cycles modes, it can't jump to a specific one.
+            // Ctrl+Tab opens the mode pie menu — closest we can get without WebSocket.
+            // TODO Layer 2: Use WebSocket to send bpy.ops.object.mode_set(mode='OBJECT') etc.
+            this.Plugin.ClientApplication.SendKeyboardShortcut(
+                VirtualKeyCode.Tab, ModifierKey.Command);
 
-            PluginLog.Info($"Mode switch: {actionParameter}");
+            PluginLog.Info($"Mode switch requested: {actionParameter} (pie menu opened)");
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)

@@ -15,6 +15,11 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void ApplyAdjustment(String actionParameter, Int32 diff)
         {
+            if (diff == 0)
+            {
+                return;
+            }
+
             if (diff > 0)
             {
                 // ] = increase brush size

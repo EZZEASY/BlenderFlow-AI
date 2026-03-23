@@ -17,6 +17,11 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void ApplyAdjustment(String actionParameter, Int32 diff)
         {
+            if (diff == 0)
+            {
+                return;
+            }
+
             this._zoomLevel = Math.Clamp(this._zoomLevel + diff * 5, 0, 100);
 
             if (diff > 0)
@@ -39,6 +44,6 @@ namespace Loupedeck.BlenderFlowPlugin
             this.AdjustmentValueChanged();
         }
 
-        protected override String GetAdjustmentValue(String actionParameter) => $"{this._zoomLevel}%";
+        protected override String GetAdjustmentValue(String actionParameter) => "Zoom";
     }
 }
