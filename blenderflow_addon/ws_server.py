@@ -86,26 +86,27 @@ async def handle_message(msg_type, msg, websocket):
         return None
 
     elif msg_type == "get_state":
-        # Read state on main thread via shared dict + sleep
-        result = {"_done": False}
+        # Hop to Blender's main thread, capture state, signal via asyncio.Event
+        # (no polling race, single-writer for the shared dict).
+        loop = asyncio.get_event_loop()
+        done = asyncio.Event()
+        result = {}
 
         def read_state():
-            result.update(_get_state())
-            result["_done"] = True
+            try:
+                result.update(_get_state_safe())
+            finally:
+                loop.call_soon_threadsafe(done.set)
             return None
 
         _run_on_main_thread(read_state)
 
-        # Wait for main thread timer to fire (up to 0.5s)
-        for _ in range(10):
-            await asyncio.sleep(0.05)
-            if result.get("_done"):
-                break
-
-        result.pop("_done", None)
-        if not result.get("mode"):
-            result = _get_state_safe()
-        return {"type": "state", **result}
+        try:
+            await asyncio.wait_for(done.wait(), timeout=0.5)
+            return {"type": "state", **result}
+        except asyncio.TimeoutError:
+            # Main thread is busy — return a best-effort snapshot tagged as stale.
+            return {"type": "state", "stale": True, **_get_state_safe()}
 
     elif msg_type == "ai_prompt_request":
         _run_on_main_thread(lambda: _show_ai_prompt(websocket))
@@ -248,17 +249,34 @@ def _broadcast_error(code, message):
     _broadcast({"type": "error", "code": code, "message": message})
 
 
-def _broadcast(msg):
-    """Send a message to all connected WebSocket clients."""
-    data = json.dumps(msg)
-    for client in list(_clients):
+async def _send_with_timeout(client, data):
+    """Send to a single client with a 1s ceiling; drop the client on timeout/error."""
+    try:
+        await asyncio.wait_for(client.send(data), timeout=1.0)
+    except (asyncio.TimeoutError, Exception) as e:
+        print(f"BlenderFlow: dropping slow/broken client: {e}")
+        _clients.discard(client)
         try:
-            asyncio.run_coroutine_threadsafe(
-                client.send(data),
-                _get_loop()
-            )
+            await client.close()
         except Exception:
             pass
+
+
+def _broadcast(msg):
+    """Send a message to all connected WebSocket clients.
+
+    A slow or wedged client must not block siblings, so we schedule an
+    independent fire-and-forget coroutine per client.
+    """
+    data = json.dumps(msg)
+    loop = _get_loop()
+    if loop is None:
+        return
+    for client in list(_clients):
+        try:
+            asyncio.run_coroutine_threadsafe(_send_with_timeout(client, data), loop)
+        except Exception as e:
+            print(f"BlenderFlow: broadcast schedule error: {e}")
 
 
 _loop_ref = None

@@ -142,7 +142,7 @@ async def run_tests():
             f"收到: {r}",
         ))
 
-        # ── 合法 get_state 仍然能工作（回归） ─────────────────────
+        # ── 合法 get_state 仍然能工作（F8 回归 + 新 event 实现） ──
         print(f"\n=== 回归: get_state 仍然返回 state ===")
         r = await send_and_recv(ws, {"type": "get_state"}, timeout=2.0)
         results.append(check(
@@ -150,6 +150,22 @@ async def run_tests():
             r and r.get("type") == "state",
             f"收到: {r}",
         ))
+        results.append(check(
+            "get_state 携带 mode 字段",
+            r and isinstance(r.get("mode"), str) and r.get("mode"),
+            f"mode={r.get('mode') if r else None!r}",
+        ))
+
+        # ── F8: 连续多次 get_state 每次都能返回（event-based 实现回归） ──
+        print(f"\n=== F8: 连续 5 次 get_state 均返回完整 state ===")
+        all_ok = True
+        for i in range(5):
+            r = await send_and_recv(ws, {"type": "get_state"}, timeout=2.0)
+            if not (r and r.get("type") == "state" and r.get("mode")):
+                all_ok = False
+                print(f"    迭代 {i} 失败: {r}")
+                break
+        results.append(check("5 次 get_state 全部成功", all_ok))
 
     passed = sum(results)
     total = len(results)

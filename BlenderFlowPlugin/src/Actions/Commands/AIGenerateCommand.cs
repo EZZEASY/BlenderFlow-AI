@@ -11,7 +11,7 @@ namespace Loupedeck.BlenderFlowPlugin
         public AIGenerateCommand()
             : base(
                 displayName: "AI Generate",
-                description: "Generate 3D model with AI",
+                description: "Generate 3D model with AI (long-press to cancel)",
                 groupName: "AI")
         {
         }
@@ -20,15 +20,21 @@ namespace Loupedeck.BlenderFlowPlugin
         {
             var plugin = (BlenderFlowPlugin)this.Plugin;
 
-            if (!plugin.BlenderConnection.IsConnected)
+            // If a job is in flight, a tap cancels it rather than queuing another.
+            if (_status == "waiting" || _status == "submitting" ||
+                _status == "generating" || _status == "downloading")
             {
-                PluginLog.Warning("AI Generate: Blender not connected");
+                plugin.AIService?.Cancel();
+                _status = "idle";
+                UnsubscribeEvents();
+                this.ActionImageChanged();
+                PluginLog.Info("AI Generate: cancelled by user");
                 return;
             }
 
-            if (_status != "idle")
+            if (!plugin.BlenderConnection.IsConnected)
             {
-                PluginLog.Info("AI Generate: already in progress");
+                PluginLog.Warning("AI Generate: Blender not connected");
                 return;
             }
 
@@ -37,8 +43,9 @@ namespace Loupedeck.BlenderFlowPlugin
             plugin.AIService.OnCompleted += OnCompleted;
             plugin.AIService.OnFailed += OnFailed;
 
-            // Listen for cancellation (prompt dialog dismissed)
-            plugin.OnBlenderStateChanged += OnStateChanged;
+            // Listen for prompt dialog dismissal — narrower than OnBlenderStateChanged
+            // so unrelated mode changes during waiting don't abort the wait.
+            plugin.OnAiPromptCancelled += OnPromptCancelled;
 
             // Send prompt request to Blender (shows dialog)
             Task.Run(async () => await plugin.BlenderConnection.SendAiPromptRequestAsync());
@@ -48,9 +55,8 @@ namespace Loupedeck.BlenderFlowPlugin
             PluginLog.Info("AI Generate: prompt dialog requested");
         }
 
-        private void OnStateChanged()
+        private void OnPromptCancelled()
         {
-            // If we're waiting for prompt and state changes, user may have cancelled
             if (_status == "waiting")
             {
                 _status = "idle";
@@ -91,10 +97,14 @@ namespace Loupedeck.BlenderFlowPlugin
         private void UnsubscribeEvents()
         {
             var plugin = (BlenderFlowPlugin)this.Plugin;
-            plugin.AIService.OnProgressChanged -= OnProgressChanged;
-            plugin.AIService.OnCompleted -= OnCompleted;
-            plugin.AIService.OnFailed -= OnFailed;
-            plugin.OnBlenderStateChanged -= OnStateChanged;
+            if (plugin == null) return;
+            if (plugin.AIService != null)
+            {
+                plugin.AIService.OnProgressChanged -= OnProgressChanged;
+                plugin.AIService.OnCompleted -= OnCompleted;
+                plugin.AIService.OnFailed -= OnFailed;
+            }
+            plugin.OnAiPromptCancelled -= OnPromptCancelled;
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)

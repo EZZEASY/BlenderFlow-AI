@@ -16,6 +16,9 @@ namespace Loupedeck.BlenderFlowPlugin.Services
         private Int32 _failCount;
         private CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
 
+        // ClientWebSocket does not allow concurrent SendAsync calls.
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+
         public Boolean IsConnected => _isConnected;
         public Boolean IsDisconnected => _failCount >= 3;
 
@@ -106,19 +109,17 @@ namespace Loupedeck.BlenderFlowPlugin.Services
 
         public async Task SendAsync(String type, Object payload = null)
         {
-            if (!_isConnected || _ws?.State != WebSocketState.Open)
+            if (_disposed || !_isConnected || _ws?.State != WebSocketState.Open)
             {
                 return;
             }
 
+            // Serialize outside the lock so the critical section is just the socket write.
+            String json;
             try
             {
-                var msg = new { type = type };
-                String json;
-
                 if (payload != null)
                 {
-                    // Merge type with payload properties
                     var dict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<String, Object>>(
                         JsonSerializer.Serialize(payload));
                     dict["type"] = type;
@@ -126,19 +127,47 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 }
                 else
                 {
-                    json = JsonSerializer.Serialize(msg);
+                    json = JsonSerializer.Serialize(new { type = type });
                 }
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Warning(ex, "WebSocket payload serialize error");
+                return;
+            }
 
-                var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var token = _lifetimeCts.Token;
+
+            if (!await _sendLock.WaitAsync(TimeSpan.FromSeconds(3), token).ConfigureAwait(false))
+            {
+                PluginLog.Warning("WebSocket send skipped: lock contention timeout");
+                return;
+            }
+            try
+            {
+                // Re-check state after acquiring the lock — the socket may have closed while we waited.
+                if (_ws?.State != WebSocketState.Open)
+                {
+                    return;
+                }
                 await _ws.SendAsync(
                     new ArraySegment<Byte>(bytes),
                     WebSocketMessageType.Text,
                     true,
-                    CancellationToken.None);
+                    token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Disposed / reconnecting
             }
             catch (Exception ex)
             {
-                PluginLog.Warning($"WebSocket send error: {ex.Message}");
+                PluginLog.Warning(ex, "WebSocket send error");
+            }
+            finally
+            {
+                try { _sendLock.Release(); } catch { }
             }
         }
 
@@ -201,6 +230,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             }
 
             try { _lifetimeCts.Dispose(); } catch { }
+            try { _sendLock.Dispose(); } catch { }
         }
     }
 }
