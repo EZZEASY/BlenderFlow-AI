@@ -14,7 +14,10 @@ namespace Loupedeck.BlenderFlowPlugin.Services
         private Boolean _isConnected;
         private Boolean _disposed;
         private Int32 _failCount;
-        private CancellationTokenSource _cts;
+        private CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
+
+        // ClientWebSocket does not allow concurrent SendAsync calls.
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         public Boolean IsConnected => _isConnected;
         public Boolean IsDisconnected => _failCount >= 3;
@@ -30,12 +33,15 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 return;
             }
 
+            // 5s connect timeout, linked to lifetime token so Dispose cancels in-flight connects
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+            connectCts.CancelAfter(TimeSpan.FromSeconds(5));
+
             try
             {
                 _ws?.Dispose();
                 _ws = new ClientWebSocket();
-                _cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await _ws.ConnectAsync(new Uri(_uri), _cts.Token);
+                await _ws.ConnectAsync(new Uri(_uri), connectCts.Token);
                 _isConnected = true;
                 _failCount = 0;
                 OnConnected?.Invoke();
@@ -60,12 +66,13 @@ namespace Loupedeck.BlenderFlowPlugin.Services
         private async Task ListenAsync()
         {
             var buffer = new Byte[8192];
+            var token = _lifetimeCts.Token;
             try
             {
                 while (_ws?.State == WebSocketState.Open && !_disposed)
                 {
                     var result = await _ws.ReceiveAsync(
-                        new ArraySegment<Byte>(buffer), CancellationToken.None);
+                        new ArraySegment<Byte>(buffer), token);
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
@@ -78,36 +85,41 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             }
             catch (Exception)
             {
-                // Connection lost
+                // Connection lost or cancelled
             }
 
             _isConnected = false;
             OnDisconnected?.Invoke();
             PluginLog.Info("WebSocket connection lost");
 
-            // Auto-reconnect after 5 seconds
+            // Auto-reconnect after 5 seconds (skip if disposed)
             if (!_disposed)
             {
-                await Task.Delay(5000);
-                await ConnectAsync();
+                try
+                {
+                    await Task.Delay(5000, token);
+                    await ConnectAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Shutting down — do not reconnect
+                }
             }
         }
 
         public async Task SendAsync(String type, Object payload = null)
         {
-            if (!_isConnected || _ws?.State != WebSocketState.Open)
+            if (_disposed || !_isConnected || _ws?.State != WebSocketState.Open)
             {
                 return;
             }
 
+            // Serialize outside the lock so the critical section is just the socket write.
+            String json;
             try
             {
-                var msg = new { type = type };
-                String json;
-
                 if (payload != null)
                 {
-                    // Merge type with payload properties
                     var dict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<String, Object>>(
                         JsonSerializer.Serialize(payload));
                     dict["type"] = type;
@@ -115,19 +127,47 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 }
                 else
                 {
-                    json = JsonSerializer.Serialize(msg);
+                    json = JsonSerializer.Serialize(new { type = type });
                 }
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Warning(ex, "WebSocket payload serialize error");
+                return;
+            }
 
-                var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var token = _lifetimeCts.Token;
+
+            if (!await _sendLock.WaitAsync(TimeSpan.FromSeconds(3), token).ConfigureAwait(false))
+            {
+                PluginLog.Warning("WebSocket send skipped: lock contention timeout");
+                return;
+            }
+            try
+            {
+                // Re-check state after acquiring the lock — the socket may have closed while we waited.
+                if (_ws?.State != WebSocketState.Open)
+                {
+                    return;
+                }
                 await _ws.SendAsync(
                     new ArraySegment<Byte>(bytes),
                     WebSocketMessageType.Text,
                     true,
-                    CancellationToken.None);
+                    token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Disposed / reconnecting
             }
             catch (Exception ex)
             {
-                PluginLog.Warning($"WebSocket send error: {ex.Message}");
+                PluginLog.Warning(ex, "WebSocket send error");
+            }
+            finally
+            {
+                try { _sendLock.Release(); } catch { }
             }
         }
 
@@ -158,16 +198,39 @@ namespace Loupedeck.BlenderFlowPlugin.Services
 
         public void Dispose()
         {
-            _disposed = true;
-            _cts?.Cancel();
-            try
+            if (_disposed)
             {
-                _ws?.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None)
-                    .GetAwaiter().GetResult();
+                return;
             }
-            catch { }
-            _ws?.Dispose();
+
+            _disposed = true;
             _isConnected = false;
+
+            // Cancel any in-flight connect / receive / reconnect-delay.
+            try { _lifetimeCts.Cancel(); } catch { }
+
+            // Best-effort graceful close with a hard timeout; fall back to Abort so
+            // we never block the plugin host (Loupedeck) on a wedged socket.
+            var ws = _ws;
+            if (ws != null)
+            {
+                try
+                {
+                    using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    var closeTask = ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", closeCts.Token);
+                    // Fire-and-forget; log if it fails later but don't block Dispose.
+                    _ = closeTask.ContinueWith(
+                        t => PluginLog.Warning($"WebSocket close error: {t.Exception?.GetBaseException().Message}"),
+                        TaskContinuationOptions.OnlyOnFaulted);
+                }
+                catch { }
+
+                try { ws.Abort(); } catch { }
+                try { ws.Dispose(); } catch { }
+            }
+
+            try { _lifetimeCts.Dispose(); } catch { }
+            try { _sendLock.Dispose(); } catch { }
         }
     }
 }

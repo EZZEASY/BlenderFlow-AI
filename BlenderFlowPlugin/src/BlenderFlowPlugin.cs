@@ -19,6 +19,14 @@ namespace Loupedeck.BlenderFlowPlugin
 
         public event Action OnBlenderStateChanged;
 
+        /// <summary>Fires when the AI prompt dialog was dismissed in Blender.</summary>
+        public event Action OnAiPromptCancelled;
+
+        // Keep handler references so Unload can symmetrically unsubscribe.
+        private Action<String> _onMessageHandler;
+        private Action _onConnectedHandler;
+        private Action _onDisconnectedHandler;
+
         public BlenderFlowPlugin()
         {
             PluginLog.Init(this.Log);
@@ -35,9 +43,13 @@ namespace Loupedeck.BlenderFlowPlugin
             this.PluginEvents.AddEvent("modeSwitch", "Mode Switch", "Blender mode changed");
             this.PluginEvents.AddEvent("aiGenerateFailed", "AI Failed", "AI generation error");
 
-            BlenderConnection.OnMessageReceived += HandleBlenderMessage;
-            BlenderConnection.OnConnected += () => PluginLog.Info("Blender connected");
-            BlenderConnection.OnDisconnected += () => PluginLog.Info("Blender disconnected");
+            _onMessageHandler = HandleBlenderMessage;
+            _onConnectedHandler = () => PluginLog.Info("Blender connected");
+            _onDisconnectedHandler = () => PluginLog.Info("Blender disconnected");
+
+            BlenderConnection.OnMessageReceived += _onMessageHandler;
+            BlenderConnection.OnConnected += _onConnectedHandler;
+            BlenderConnection.OnDisconnected += _onDisconnectedHandler;
 
             // Start connection attempt
             Task.Run(async () => await BlenderConnection.ConnectAsync());
@@ -47,7 +59,18 @@ namespace Loupedeck.BlenderFlowPlugin
 
         public override void Unload()
         {
-            BlenderConnection?.Dispose();
+            // Symmetric cleanup — accumulated subscriptions cause duplicate
+            // callbacks on Loupedeck plugin reload.
+            if (BlenderConnection != null)
+            {
+                if (_onMessageHandler != null) BlenderConnection.OnMessageReceived -= _onMessageHandler;
+                if (_onConnectedHandler != null) BlenderConnection.OnConnected -= _onConnectedHandler;
+                if (_onDisconnectedHandler != null) BlenderConnection.OnDisconnected -= _onDisconnectedHandler;
+            }
+
+            try { AIService?.Dispose(); } catch { }
+            try { BlenderConnection?.Dispose(); } catch { }
+
             PluginLog.Info("BlenderFlow AI plugin unloaded");
         }
 
@@ -56,18 +79,28 @@ namespace Loupedeck.BlenderFlowPlugin
             try
             {
                 using var doc = JsonDocument.Parse(rawMessage);
-                var type = doc.RootElement.GetProperty("type").GetString();
+                if (!doc.RootElement.TryGetProperty("type", out var typeProp))
+                {
+                    return;
+                }
+                var type = typeProp.GetString();
 
                 switch (type)
                 {
                     case "mode_changed":
-                        CurrentMode = doc.RootElement.GetProperty("mode").GetString();
+                        if (doc.RootElement.TryGetProperty("mode", out var modeProp))
+                        {
+                            CurrentMode = modeProp.GetString();
+                        }
                         OnBlenderStateChanged?.Invoke();
                         this.PluginEvents.RaiseEvent("modeSwitch");
                         break;
 
                     case "state":
-                        CurrentMode = doc.RootElement.GetProperty("mode").GetString();
+                        if (doc.RootElement.TryGetProperty("mode", out var stateMode))
+                        {
+                            CurrentMode = stateMode.GetString();
+                        }
                         if (doc.RootElement.TryGetProperty("active_object", out var obj))
                         {
                             ActiveObject = obj.GetString();
@@ -76,25 +109,27 @@ namespace Loupedeck.BlenderFlowPlugin
                         break;
 
                     case "ai_prompt_response":
-                        var prompt = doc.RootElement.GetProperty("prompt").GetString();
-                        HandleAiPrompt(prompt);
+                        if (doc.RootElement.TryGetProperty("prompt", out var promptProp))
+                        {
+                            HandleAiPrompt(promptProp.GetString());
+                        }
                         break;
 
                     case "ai_prompt_cancelled":
                         PluginLog.Info("AI prompt cancelled by user");
-                        OnBlenderStateChanged?.Invoke(); // Signals AIGenerateCommand to reset
+                        OnAiPromptCancelled?.Invoke();
                         break;
 
                     case "error":
-                        var code = doc.RootElement.GetProperty("code").GetString();
-                        var message = doc.RootElement.GetProperty("message").GetString();
+                        var code = doc.RootElement.TryGetProperty("code", out var c) ? c.GetString() : "?";
+                        var message = doc.RootElement.TryGetProperty("message", out var m) ? m.GetString() : "";
                         PluginLog.Warning($"Blender error: {code} - {message}");
                         break;
                 }
             }
             catch (Exception ex)
             {
-                PluginLog.Warning($"Message parse error: {ex.Message}");
+                PluginLog.Warning(ex, "Message parse error");
             }
         }
 
@@ -102,19 +137,25 @@ namespace Loupedeck.BlenderFlowPlugin
         {
             PluginLog.Info($"AI generating: {prompt}");
 
-            // Use a local handler to avoid accumulating persistent event subscriptions
+            // Use local handlers that remove BOTH subscriptions on either terminal event.
+            // Interlocked guards against races where OnCompleted and OnFailed both fire.
+            var settled = new Int32[1];
             Action<String> onCompleted = null;
+            Action<String> onFailed = null;
+
             onCompleted = async (path) =>
             {
+                if (System.Threading.Interlocked.Exchange(ref settled[0], 1) != 0) return;
                 AIService.OnCompleted -= onCompleted;
+                AIService.OnFailed -= onFailed;
                 var format = path.EndsWith(".glb") || path.EndsWith(".gltf") ? "gltf" : "obj";
                 await BlenderConnection.SendImportModelAsync(path, format);
                 this.PluginEvents.RaiseEvent("aiGenerateComplete");
             };
 
-            Action<String> onFailed = null;
             onFailed = (error) =>
             {
+                if (System.Threading.Interlocked.Exchange(ref settled[0], 1) != 0) return;
                 AIService.OnCompleted -= onCompleted;
                 AIService.OnFailed -= onFailed;
                 this.PluginEvents.RaiseEvent("aiGenerateFailed");

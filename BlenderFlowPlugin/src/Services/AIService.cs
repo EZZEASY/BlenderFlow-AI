@@ -5,12 +5,19 @@ namespace Loupedeck.BlenderFlowPlugin.Services
     using System.Net.Http;
     using System.Text;
     using System.Text.Json;
+    using System.Threading;
     using System.Threading.Tasks;
 
-    public class AIService
+    public class AIService : IDisposable
     {
-        private readonly HttpClient _http = new HttpClient();
+        // Shared across all plugin instances: HttpClient is documented to be reused.
+        // A per-call timeout lives on the request's CancellationToken, not here.
+        private static readonly HttpClient _http = new HttpClient();
+
         private readonly String _tempDir;
+        private readonly Object _jobLock = new Object();
+        private CancellationTokenSource _currentJob;
+        private Boolean _disposed;
 
         // TODO: Replace with actual API key management
         // For hackathon: set TRIPO_API_KEY environment variable
@@ -33,13 +40,44 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             CleanOldFiles();
         }
 
+        /// <summary>Cancel any in-flight generation. Safe to call repeatedly.</summary>
+        public void Cancel()
+        {
+            CancellationTokenSource cts;
+            lock (_jobLock)
+            {
+                cts = _currentJob;
+                _currentJob = null;
+            }
+            if (cts != null)
+            {
+                try { cts.Cancel(); } catch { }
+                try { cts.Dispose(); } catch { }
+            }
+        }
+
         public async Task GenerateModelAsync(String prompt)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             if (String.IsNullOrEmpty(ApiKey))
             {
                 OnFailed?.Invoke("API key not set. Set TRIPO_API_KEY environment variable.");
                 return;
             }
+
+            // Replace any in-flight job so we never have two concurrent generations.
+            CancellationTokenSource cts;
+            lock (_jobLock)
+            {
+                _currentJob?.Cancel();
+                _currentJob?.Dispose();
+                cts = _currentJob = new CancellationTokenSource();
+            }
+            var token = cts.Token;
 
             Status = "submitting";
             Progress = 0;
@@ -48,7 +86,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             try
             {
                 // Step 1: Create task
-                var taskId = await CreateTaskAsync(prompt);
+                var taskId = await CreateTaskAsync(prompt, token);
                 if (String.IsNullOrEmpty(taskId))
                 {
                     OnFailed?.Invoke("Failed to create AI generation task");
@@ -59,7 +97,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
 
                 // Step 2: Poll for completion
                 Status = "generating";
-                var modelUrl = await PollTaskAsync(taskId);
+                var modelUrl = await PollTaskAsync(taskId, token);
                 if (String.IsNullOrEmpty(modelUrl))
                 {
                     OnFailed?.Invoke("AI generation timed out or failed");
@@ -71,7 +109,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 Progress = 90;
                 OnProgressChanged?.Invoke(Status, Progress);
 
-                var localPath = await DownloadModelAsync(modelUrl, taskId);
+                var localPath = await DownloadModelAsync(modelUrl, taskId, token);
                 if (String.IsNullOrEmpty(localPath))
                 {
                     OnFailed?.Invoke("Failed to download generated model");
@@ -84,16 +122,34 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 OnCompleted?.Invoke(localPath);
                 PluginLog.Info($"AI model downloaded: {localPath}");
             }
+            catch (OperationCanceledException)
+            {
+                Status = "idle";
+                Progress = 0;
+                OnProgressChanged?.Invoke(Status, Progress);
+                PluginLog.Info("AI generation cancelled");
+            }
             catch (Exception ex)
             {
                 Status = "idle";
                 Progress = 0;
                 OnFailed?.Invoke($"AI error: {ex.Message}");
-                PluginLog.Error($"AI generation error: {ex.Message}");
+                PluginLog.Error(ex, "AI generation error");
+            }
+            finally
+            {
+                lock (_jobLock)
+                {
+                    if (_currentJob == cts)
+                    {
+                        _currentJob = null;
+                    }
+                }
+                try { cts.Dispose(); } catch { }
             }
         }
 
-        private async Task<String> CreateTaskAsync(String prompt)
+        private async Task<String> CreateTaskAsync(String prompt, CancellationToken token)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, "https://api.tripo3d.ai/v2/openapi/task");
             request.Headers.Add("Authorization", $"Bearer {ApiKey}");
@@ -106,7 +162,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await _http.SendAsync(request);
+            var response = await _http.SendAsync(request, token);
             var body = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
@@ -122,14 +178,14 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 .GetString();
         }
 
-        private async Task<String> PollTaskAsync(String taskId)
+        private async Task<String> PollTaskAsync(String taskId, CancellationToken token)
         {
             var maxAttempts = 60; // 2s * 60 = 120s timeout
             var retryCount = 0;
 
             for (var i = 0; i < maxAttempts; i++)
             {
-                await Task.Delay(2000);
+                await Task.Delay(2000, token);
 
                 try
                 {
@@ -137,7 +193,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                         $"https://api.tripo3d.ai/v2/openapi/task/{taskId}");
                     request.Headers.Add("Authorization", $"Bearer {ApiKey}");
 
-                    var response = await _http.SendAsync(request);
+                    var response = await _http.SendAsync(request, token);
 
                     if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                     {
@@ -147,7 +203,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                             return null;
                         }
 
-                        await Task.Delay(5000);
+                        await Task.Delay(5000, token);
                         continue;
                     }
 
@@ -180,20 +236,25 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                         return null;
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
-                    PluginLog.Warning($"AI poll error: {ex.Message}");
+                    PluginLog.Warning(ex, $"AI poll error (task {taskId})");
                 }
             }
 
             return null; // timeout
         }
 
-        private async Task<String> DownloadModelAsync(String url, String taskId)
+        private async Task<String> DownloadModelAsync(String url, String taskId, CancellationToken token)
         {
+            String filePath = null;
             try
             {
-                var response = await _http.GetAsync(url);
+                var response = await _http.GetAsync(url, token);
                 if (!response.IsSuccessStatusCode)
                 {
                     return null;
@@ -201,17 +262,34 @@ namespace Loupedeck.BlenderFlowPlugin.Services
 
                 var ext = url.Contains(".glb") ? ".glb" : url.Contains(".obj") ? ".obj" : ".glb";
                 var fileName = $"blenderflow_{taskId}{ext}";
-                var filePath = Path.Combine(_tempDir, fileName);
+                filePath = Path.Combine(_tempDir, fileName);
 
-                var data = await response.Content.ReadAsByteArrayAsync();
-                await File.WriteAllBytesAsync(filePath, data);
+                // Stream directly to disk so partial bodies don't sit in memory, and so
+                // we can delete the half-written file on cancel/failure.
+                using (var source = await response.Content.ReadAsStreamAsync())
+                using (var dest = File.Create(filePath))
+                {
+                    await source.CopyToAsync(dest, 81920, token);
+                }
                 return filePath;
+            }
+            catch (OperationCanceledException)
+            {
+                TryDelete(filePath);
+                throw;
             }
             catch (Exception ex)
             {
-                PluginLog.Error($"AI download error: {ex.Message}");
+                TryDelete(filePath);
+                PluginLog.Error(ex, $"AI download error (task {taskId})");
                 return null;
             }
+        }
+
+        private static void TryDelete(String path)
+        {
+            if (String.IsNullOrEmpty(path)) return;
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
         private void CleanOldFiles()
@@ -223,16 +301,29 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                     return;
                 }
 
+                // LastWriteTime is populated by the OS on every platform we target;
+                // CreationTime is unreliable on APFS/ext4 and can return epoch.
                 var cutoff = DateTime.Now.AddHours(-1);
                 foreach (var file in Directory.GetFiles(_tempDir))
                 {
-                    if (File.GetCreationTime(file) < cutoff)
+                    if (File.GetLastWriteTime(file) < cutoff)
                     {
                         File.Delete(file);
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                PluginLog.Warning(ex, "AI temp cleanup failed");
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            Cancel();
+            // HttpClient is static — do NOT dispose it.
         }
     }
 }
