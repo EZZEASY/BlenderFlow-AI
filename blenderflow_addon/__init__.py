@@ -67,6 +67,18 @@ class BLENDERFLOW_PT_panel(bpy.types.Panel):
 
 # ─── Server 管理 ───
 
+def _run_loop(loop):
+    """Thread target: drive the asyncio loop until run_server() returns."""
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(ws_server.run_server(loop))
+    finally:
+        try:
+            loop.close()
+        except Exception as e:
+            print(f"BlenderFlow: loop close error: {e}")
+
+
 def start_server():
     global _server_thread, _server_loop
     if _server_thread and _server_thread.is_alive():
@@ -74,20 +86,35 @@ def start_server():
 
     _server_loop = asyncio.new_event_loop()
     _server_thread = threading.Thread(
-        target=lambda: _server_loop.run_until_complete(ws_server.run_server(_server_loop)),
+        target=_run_loop,
+        args=(_server_loop,),
         daemon=True,
-        name="BlenderFlow-WS"
+        name="BlenderFlow-WS",
     )
     _server_thread.start()
     print("BlenderFlow: WebSocket server started on ws://localhost:9876")
 
 
 def stop_server():
+    """Signal the server to stop and wait for the thread to exit.
+
+    Must be synchronous: Blender's unregister() must fully release the port
+    before a subsequent register() tries to bind it again.
+    """
     global _server_thread, _server_loop
-    if _server_loop:
-        _server_loop.call_soon_threadsafe(_server_loop.stop)
-        _server_loop = None
+    thread = _server_thread
+    loop = _server_loop
     _server_thread = None
+    _server_loop = None
+
+    if loop is not None:
+        ws_server.request_stop()
+
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=3.0)
+        if thread.is_alive():
+            print("BlenderFlow: WARNING — server thread did not exit within 3s")
+
     print("BlenderFlow: WebSocket server stopped")
 
 
@@ -102,6 +129,10 @@ _classes = (
 
 def register():
     for cls in _classes:
+        try:
+            bpy.utils.unregister_class(cls)
+        except (RuntimeError, ValueError):
+            pass
         bpy.utils.register_class(cls)
     commands.register()
     start_server()
@@ -111,4 +142,7 @@ def unregister():
     stop_server()
     commands.unregister()
     for cls in reversed(_classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except (RuntimeError, ValueError):
+            pass

@@ -9,7 +9,7 @@ Messages: JSON, see design doc for schema.
 
 import asyncio
 import json
-import os
+from pathlib import Path
 import bpy
 
 try:
@@ -22,6 +22,16 @@ except ImportError:
 
 WS_HOST = "localhost"
 WS_PORT = 9876
+
+# Whitelists — reject anything else coming over the socket. The server binds
+# to localhost only, but any local process can connect, so treat inputs as
+# untrusted and enforce the protocol at the boundary.
+_ALLOWED_MODES = {"OBJECT", "EDIT", "SCULPT", "POSE", "WEIGHT_PAINT", "VERTEX_PAINT", "TEXTURE_PAINT", "PARTICLE_EDIT"}
+_ALLOWED_TOOL_OPS = {"extrude", "bevel", "loopcut", "subdivide"}
+_ALLOWED_IMPORT_FORMATS = {"gltf", "glb", "obj", "fbx"}
+
+# Only allow imports from this directory tree (matches AIService._tempDir on C# side).
+_IMPORT_ROOT = (Path.home() / "BlenderFlow" / "temp").resolve()
 
 # Connected clients
 _clients = set()
@@ -63,11 +73,15 @@ async def handle_message(msg_type, msg, websocket):
 
     if msg_type == "set_mode":
         mode = msg.get("mode", "OBJECT")
+        if mode not in _ALLOWED_MODES:
+            return {"type": "error", "code": "invalid_mode", "message": f"Unsupported mode: {mode}"}
         _run_on_main_thread(lambda: _set_mode(mode))
         return None
 
     elif msg_type == "tool":
         op = msg.get("op", "")
+        if op not in _ALLOWED_TOOL_OPS:
+            return {"type": "error", "code": "invalid_tool", "message": f"Unsupported tool op: {op}"}
         _run_on_main_thread(lambda op=op: _run_tool(op))
         return None
 
@@ -100,7 +114,12 @@ async def handle_message(msg_type, msg, websocket):
     elif msg_type == "import_model":
         path = msg.get("path", "")
         fmt = msg.get("format", "gltf")
-        _run_on_main_thread(lambda: _import_model(path, fmt))
+        if fmt not in _ALLOWED_IMPORT_FORMATS:
+            return {"type": "error", "code": "invalid_format", "message": f"Unsupported import format: {fmt}"}
+        safe_path = _validate_import_path(path)
+        if safe_path is None:
+            return {"type": "error", "code": "invalid_path", "message": "Path outside allowed import directory"}
+        _run_on_main_thread(lambda p=safe_path, f=fmt: _import_model(p, f))
         return None
 
     else:
@@ -172,25 +191,41 @@ def _get_state():
     return state
 
 
-def _import_model(path, fmt):
-    """Import a 3D model file. Must run on main thread."""
-    expanded = os.path.expanduser(path)
-    if not os.path.exists(expanded):
-        print(f"BlenderFlow: import file not found: {expanded}")
-        _broadcast_error("import_failed", f"File not found: {expanded}")
+def _validate_import_path(path):
+    """Reject anything outside the allowed import root; returns resolved str path, or None."""
+    if not path or not isinstance(path, str):
+        return None
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except (OSError, RuntimeError):
         return None
 
     try:
-        if fmt == "gltf" or expanded.endswith((".glb", ".gltf")):
-            bpy.ops.import_scene.gltf(filepath=expanded)
-        elif fmt == "obj" or expanded.endswith(".obj"):
+        resolved.relative_to(_IMPORT_ROOT)
+    except ValueError:
+        print(f"BlenderFlow: rejected import path outside {_IMPORT_ROOT}: {resolved}")
+        return None
+
+    if not resolved.is_file():
+        print(f"BlenderFlow: rejected import path (not a file): {resolved}")
+        return None
+
+    return str(resolved)
+
+
+def _import_model(path, fmt):
+    """Import a 3D model file. Must run on main thread. Path is pre-validated."""
+    try:
+        if fmt in ("gltf", "glb") or path.endswith((".glb", ".gltf")):
+            bpy.ops.import_scene.gltf(filepath=path)
+        elif fmt == "obj" or path.endswith(".obj"):
             # Blender 4.x+
-            bpy.ops.wm.obj_import(filepath=expanded)
-        elif expanded.endswith(".fbx"):
-            bpy.ops.import_scene.fbx(filepath=expanded)
+            bpy.ops.wm.obj_import(filepath=path)
+        elif fmt == "fbx" or path.endswith(".fbx"):
+            bpy.ops.import_scene.fbx(filepath=path)
         else:
-            bpy.ops.import_scene.gltf(filepath=expanded)
-        print(f"BlenderFlow: imported {expanded}")
+            bpy.ops.import_scene.gltf(filepath=path)
+        print(f"BlenderFlow: imported {path}")
     except Exception as e:
         print(f"BlenderFlow: import error: {e}")
         _broadcast_error("import_failed", str(e))
@@ -227,20 +262,46 @@ def _broadcast(msg):
 
 
 _loop_ref = None
+_stop_event = None  # asyncio.Event, created on the server loop
 
 
 def _get_loop():
     return _loop_ref
 
 
+def request_stop():
+    """Signal the running server to exit. Safe to call from any thread."""
+    loop = _loop_ref
+    event = _stop_event
+    if loop is None or event is None:
+        return
+    try:
+        loop.call_soon_threadsafe(event.set)
+    except RuntimeError:
+        # Loop already closed
+        pass
+
+
 async def run_server(loop):
-    """Start the WebSocket server."""
-    global _loop_ref
+    """Start the WebSocket server. Exits cleanly when request_stop() is called."""
+    global _loop_ref, _stop_event
     _loop_ref = loop
+    _stop_event = asyncio.Event()
 
     try:
         async with serve(handler, WS_HOST, WS_PORT):
             print(f"BlenderFlow: WebSocket server listening on ws://{WS_HOST}:{WS_PORT}")
-            await asyncio.Future()  # run forever
+            await _stop_event.wait()
+            print("BlenderFlow: Stop signal received, shutting down server")
     except OSError as e:
         print(f"BlenderFlow: Could not start server: {e}")
+    finally:
+        # Close every client connection so the async-with exits promptly.
+        for client in list(_clients):
+            try:
+                await client.close()
+            except Exception:
+                pass
+        _clients.clear()
+        _loop_ref = None
+        _stop_event = None

@@ -47,10 +47,19 @@ _classes = (
 
 
 def register():
+    # Idempotent: drop stale registrations (e.g. from an interrupted disable)
+    # before re-adding, otherwise re-enabling the addon errors out.
     for cls in _classes:
+        try:
+            bpy.utils.unregister_class(cls)
+        except (RuntimeError, ValueError):
+            pass
         bpy.utils.register_class(cls)
 
 
 def unregister():
     for cls in reversed(_classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except (RuntimeError, ValueError):
+            pass
