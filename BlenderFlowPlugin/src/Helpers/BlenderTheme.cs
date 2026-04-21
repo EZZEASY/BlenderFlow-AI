@@ -31,5 +31,10 @@ namespace Loupedeck.BlenderFlowPlugin
         public static readonly BitmapColor AxisX = new BitmapColor(218, 82, 60);
         public static readonly BitmapColor AxisY = new BitmapColor(106, 184, 64);
         public static readonly BitmapColor AxisZ = new BitmapColor(62, 138, 216);
+
+        // Dark washes of axis colors for active view backgrounds.
+        public static readonly BitmapColor AxisXTint = new BitmapColor(64, 24, 18);
+        public static readonly BitmapColor AxisYTint = new BitmapColor(30, 54, 18);
+        public static readonly BitmapColor AxisZTint = new BitmapColor(18, 40, 64);
     }
 }

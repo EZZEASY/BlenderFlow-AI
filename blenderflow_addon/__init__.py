@@ -12,6 +12,7 @@ import sys
 import os
 import threading
 import asyncio
+import importlib
 
 # ─── 把内嵌的 vendor 目录加入 Python 搜索路径 ───
 _vendor_dir = os.path.join(os.path.dirname(__file__), "vendor")
@@ -128,6 +129,12 @@ _classes = (
 
 
 def register():
+    # Reload submodules on every register() so disable+enable picks up
+    # edits to ws_server.py / commands.py without a full Blender restart.
+    # The top-level `from . import ws_server` only runs once per Python
+    # process — Blender's addon loader reuses the cached module.
+    importlib.reload(ws_server)
+    importlib.reload(commands)
     for cls in _classes:
         try:
             bpy.utils.unregister_class(cls)

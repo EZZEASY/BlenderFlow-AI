@@ -1,8 +1,9 @@
 namespace Loupedeck.BlenderFlowPlugin
 {
     using System;
+    using System.Threading.Tasks;
 
-    // ─── Save (Ctrl+S) ───────────────────────────────────────────────────
+    // ─── Save (via bpy.ops over WebSocket) ───────────────────────────────
 
     public class SaveCommand : PluginDynamicCommand
     {
@@ -10,8 +11,13 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
-            this.Plugin.ClientApplication.SendKeyboardShortcut(
-                VirtualKeyCode.KeyS, ModifierKey.Control);
+            var plugin = (BlenderFlowPlugin)this.Plugin;
+            if (plugin?.BlenderConnection?.IsConnected != true)
+            {
+                PluginLog.Warning("Save: Blender not connected");
+                return;
+            }
+            Task.Run(async () => await plugin.BlenderConnection.SendSaveAsync());
             PluginLog.Info("Save");
         }
 
@@ -33,11 +39,17 @@ namespace Loupedeck.BlenderFlowPlugin
 
     public class RenderImageCommand : PluginDynamicCommand
     {
-        public RenderImageCommand() : base("Render Image", "Render current frame (F12)", "Render") { }
+        public RenderImageCommand() : base("Render Image", "Render current frame", "Render") { }
 
         protected override void RunCommand(String actionParameter)
         {
-            this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.F12);
+            var plugin = (BlenderFlowPlugin)this.Plugin;
+            if (plugin?.BlenderConnection?.IsConnected != true)
+            {
+                PluginLog.Warning("Render: Blender not connected");
+                return;
+            }
+            Task.Run(async () => await plugin.BlenderConnection.SendRenderImageAsync());
             PluginLog.Info("Render image");
         }
 
@@ -136,32 +148,122 @@ namespace Loupedeck.BlenderFlowPlugin
         }
     }
 
-    // ─── View pie (`) ────────────────────────────────────────────────────
+    // ─── Individual view commands (Numpad 1/3/7/0) ───────────────────────
+    // Blender 5.0 removed the View Pie default binding, so these
+    // dedicated keys replace it. Each sends a bare Numpad keystroke —
+    // no modifier, so it reaches Blender cleanly even on macOS.
 
-    public class ViewPieCommand : PluginDynamicCommand
+    public abstract class ViewCommandBase : PluginDynamicCommand
     {
-        public ViewPieCommand()
-            : base("View Pie", "Open viewpoint pie menu (`)", "View") { }
+        private readonly VirtualKeyCode _key;
+        private readonly String _label;
+        private readonly BitmapColor _bg;
+        private readonly BitmapColor _accent;
+
+        protected ViewCommandBase(String displayName, String description,
+            VirtualKeyCode key, String label, BitmapColor bg, BitmapColor accent)
+            : base(displayName, description, "View")
+        {
+            _key = key;
+            _label = label;
+            _bg = bg;
+            _accent = accent;
+        }
 
         protected override void RunCommand(String actionParameter)
         {
-            // Oem3 = backtick (`) on US layout — opens View pie in Blender
-            this.Plugin.ClientApplication.SendKeyboardShortcut(VirtualKeyCode.Oem3);
-            PluginLog.Info("View pie");
+            this.Plugin.ClientApplication.SendKeyboardShortcut(_key);
+            PluginLog.Info($"View: {_label}");
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
         {
             using var b = new BitmapBuilder(imageSize);
-            b.Clear(BlenderTheme.PanelBg);
+            b.Clear(_bg);
             Int32 w = imageSize.GetWidth();
             Int32 h = imageSize.GetHeight();
-            Single cx = w / 2f, cy = h * 0.56f;
-            Single size = Math.Min(w, h) * 0.28f;
-            Single thick = Math.Max(2.2f, Math.Min(w, h) / 24f);
-            BlenderIcons.AxisGizmo(b, cx, cy, size,
-                BlenderTheme.AxisX, BlenderTheme.AxisY, BlenderTheme.AxisZ, thick);
+            DrawIcon(b, w, h, _accent);
+            b.DrawText(_label, 0, (Int32)(h * 0.68f), w, (Int32)(h * 0.28f),
+                BlenderTheme.IconBright, 0, 0, 0, null);
             return b.ToImage();
+        }
+
+        protected abstract void DrawIcon(BitmapBuilder b, Int32 w, Int32 h, BitmapColor accent);
+    }
+
+    public class ViewFrontCommand : ViewCommandBase
+    {
+        public ViewFrontCommand()
+            : base("View Front", "Front orthographic view (Numpad 1)",
+                   VirtualKeyCode.NumPad1, "FRONT",
+                   BlenderTheme.AxisYTint, BlenderTheme.AxisY) { }
+
+        protected override void DrawIcon(BitmapBuilder b, Int32 w, Int32 h, BitmapColor accent)
+        {
+            // Y-axis arrow pointing toward viewer (down-front)
+            Single cx = w / 2f, cy = h * 0.40f;
+            Single s = Math.Min(w, h) * 0.22f;
+            Single thick = Math.Max(2.2f, Math.Min(w, h) / 22f);
+            b.DrawLine(cx, cy - s, cx, cy + s, accent, thick);
+            b.DrawLine(cx - s * 0.45f, cy + s * 0.55f, cx, cy + s, accent, thick);
+            b.DrawLine(cx + s * 0.45f, cy + s * 0.55f, cx, cy + s, accent, thick);
+            b.FillCircle(cx, cy - s, Math.Max(3f, s * 0.18f), accent);
+        }
+    }
+
+    public class ViewRightCommand : ViewCommandBase
+    {
+        public ViewRightCommand()
+            : base("View Right", "Right orthographic view (Numpad 3)",
+                   VirtualKeyCode.NumPad3, "RIGHT",
+                   BlenderTheme.AxisXTint, BlenderTheme.AxisX) { }
+
+        protected override void DrawIcon(BitmapBuilder b, Int32 w, Int32 h, BitmapColor accent)
+        {
+            // X-axis arrow pointing right
+            Single cx = w / 2f, cy = h * 0.40f;
+            Single s = Math.Min(w, h) * 0.22f;
+            Single thick = Math.Max(2.2f, Math.Min(w, h) / 22f);
+            b.DrawLine(cx - s, cy, cx + s, cy, accent, thick);
+            b.DrawLine(cx + s * 0.55f, cy - s * 0.45f, cx + s, cy, accent, thick);
+            b.DrawLine(cx + s * 0.55f, cy + s * 0.45f, cx + s, cy, accent, thick);
+            b.FillCircle(cx - s, cy, Math.Max(3f, s * 0.18f), accent);
+        }
+    }
+
+    public class ViewTopCommand : ViewCommandBase
+    {
+        public ViewTopCommand()
+            : base("View Top", "Top orthographic view (Numpad 7)",
+                   VirtualKeyCode.NumPad7, "TOP",
+                   BlenderTheme.AxisZTint, BlenderTheme.AxisZ) { }
+
+        protected override void DrawIcon(BitmapBuilder b, Int32 w, Int32 h, BitmapColor accent)
+        {
+            // Z-axis arrow pointing up
+            Single cx = w / 2f, cy = h * 0.40f;
+            Single s = Math.Min(w, h) * 0.22f;
+            Single thick = Math.Max(2.2f, Math.Min(w, h) / 22f);
+            b.DrawLine(cx, cy + s, cx, cy - s, accent, thick);
+            b.DrawLine(cx - s * 0.45f, cy - s * 0.55f, cx, cy - s, accent, thick);
+            b.DrawLine(cx + s * 0.45f, cy - s * 0.55f, cx, cy - s, accent, thick);
+            b.FillCircle(cx, cy + s, Math.Max(3f, s * 0.18f), accent);
+        }
+    }
+
+    public class ViewCameraCommand : ViewCommandBase
+    {
+        public ViewCameraCommand()
+            : base("View Camera", "Camera view (Numpad 0)",
+                   VirtualKeyCode.NumPad0, "CAM",
+                   BlenderTheme.PanelBg, BlenderTheme.Orange) { }
+
+        protected override void DrawIcon(BitmapBuilder b, Int32 w, Int32 h, BitmapColor accent)
+        {
+            Single cx = w / 2f, cy = h * 0.40f;
+            Single size = Math.Min(w, h) * 0.42f;
+            Single thick = Math.Max(2f, Math.Min(w, h) / 28f);
+            BlenderIcons.Camera(b, cx, cy, size, accent, thick);
         }
     }
 }

@@ -1,6 +1,7 @@
 namespace Loupedeck.BlenderFlowPlugin
 {
     using System;
+    using System.Threading.Tasks;
 
     public class UndoCommand : PluginDynamicCommand
     {
@@ -11,10 +12,18 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
-            // Blender uses Ctrl (not Cmd) on macOS too — its keymap is
-            // identical across platforms, unlike most Mac apps.
-            this.Plugin.ClientApplication.SendKeyboardShortcut(
-                VirtualKeyCode.KeyZ, ModifierKey.Control);
+            // bpy.ops.ed.undo() via WebSocket — bypasses the Mac keystroke
+            // path entirely. The SDK's SendKeyboardShortcut drops modifier
+            // keys on macOS, so Cmd+Z never reaches Blender as a real
+            // shortcut. Calling the operator directly is deterministic
+            // and doesn't require Blender to be the focused app.
+            var plugin = (BlenderFlowPlugin)this.Plugin;
+            if (plugin?.BlenderConnection?.IsConnected != true)
+            {
+                PluginLog.Warning("Undo: Blender not connected");
+                return;
+            }
+            Task.Run(async () => await plugin.BlenderConnection.SendUndoAsync());
             PluginLog.Info("Undo");
         }
 
@@ -44,8 +53,13 @@ namespace Loupedeck.BlenderFlowPlugin
 
         protected override void RunCommand(String actionParameter)
         {
-            this.Plugin.ClientApplication.SendKeyboardShortcut(
-                VirtualKeyCode.KeyZ, ModifierKey.Control | ModifierKey.Shift);
+            var plugin = (BlenderFlowPlugin)this.Plugin;
+            if (plugin?.BlenderConnection?.IsConnected != true)
+            {
+                PluginLog.Warning("Redo: Blender not connected");
+                return;
+            }
+            Task.Run(async () => await plugin.BlenderConnection.SendRedoAsync());
             PluginLog.Info("Redo");
         }
 

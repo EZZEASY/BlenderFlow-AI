@@ -92,17 +92,25 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             OnDisconnected?.Invoke();
             PluginLog.Info("WebSocket connection lost");
 
-            // Auto-reconnect after 5 seconds (skip if disposed)
-            if (!_disposed)
+            // Persistent reconnect loop — keep trying every 5s until we
+            // succeed or the plugin is unloaded. Without the loop, a single
+            // failed retry (e.g. Blender still booting when we retry) would
+            // leave us permanently stranded.
+            while (!_disposed)
             {
                 try
                 {
                     await Task.Delay(5000, token);
-                    await ConnectAsync();
                 }
                 catch (OperationCanceledException)
                 {
-                    // Shutting down — do not reconnect
+                    return;
+                }
+
+                await ConnectAsync();
+                if (_isConnected)
+                {
+                    return;
                 }
             }
         }
@@ -204,6 +212,24 @@ namespace Loupedeck.BlenderFlowPlugin.Services
         public async Task SendBrushStrengthSetAsync(Single value)
         {
             await SendAsync("brush_strength", new { value });
+        }
+
+        // Menu-style shortcuts delivered as bpy.ops calls, because the
+        // Logi SDK's keyboard injection drops modifier keys on macOS
+        // (Blender's GHOST layer filters synthetic modifier events).
+        public async Task SendUndoAsync() => await SendAsync("undo");
+        public async Task SendRedoAsync() => await SendAsync("redo");
+        public async Task SendSaveAsync() => await SendAsync("save");
+        public async Task SendRenderImageAsync() => await SendAsync("render_image");
+
+        public async Task SendViewportOrbitAsync(Single deltaDeg)
+        {
+            await SendAsync("viewport_orbit", new { delta_deg = deltaDeg });
+        }
+
+        public async Task SendViewportZoomAsync(Single factor)
+        {
+            await SendAsync("viewport_zoom", new { factor });
         }
 
         public void Dispose()

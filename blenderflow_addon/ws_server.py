@@ -131,6 +131,39 @@ async def handle_message(msg_type, msg, websocket):
         _run_on_main_thread(lambda d=delta, v=value: _set_brush_strength(d, v))
         return None
 
+    # Keystroke-equivalents that can't be delivered reliably via OS key
+    # injection on macOS (Blender's GHOST window layer filters modifier
+    # flags off synthetic events). Route them through bpy.ops directly.
+    elif msg_type == "undo":
+        _run_on_main_thread(_do_undo)
+        return None
+
+    elif msg_type == "redo":
+        _run_on_main_thread(_do_redo)
+        return None
+
+    elif msg_type == "save":
+        _run_on_main_thread(_do_save)
+        return None
+
+    elif msg_type == "render_image":
+        _run_on_main_thread(_do_render_image)
+        return None
+
+    elif msg_type == "viewport_orbit":
+        delta_deg = _parse_float(msg.get("delta_deg"), -30.0, 30.0)
+        if delta_deg is None:
+            return {"type": "error", "code": "invalid_args", "message": "viewport_orbit needs delta_deg"}
+        _run_on_main_thread(lambda d=delta_deg: _viewport_orbit(d))
+        return None
+
+    elif msg_type == "viewport_zoom":
+        factor = _parse_float(msg.get("factor"), 0.5, 2.0)
+        if factor is None or factor <= 0:
+            return {"type": "error", "code": "invalid_args", "message": "viewport_zoom needs factor in (0.5, 2.0]"}
+        _run_on_main_thread(lambda f=factor: _viewport_zoom(f))
+        return None
+
     else:
         return {
             "type": "error",
@@ -235,6 +268,86 @@ def _set_brush_strength(delta, value):
             brush.strength = max(0.0, min(2.0, brush.strength + delta))
     except Exception as e:
         print(f"BlenderFlow: brush_strength error: {e}")
+    return None
+
+
+def _do_undo():
+    try:
+        bpy.ops.ed.undo()
+    except Exception as e:
+        print(f"BlenderFlow: undo error: {e}")
+    return None
+
+
+def _do_redo():
+    try:
+        bpy.ops.ed.redo()
+    except Exception as e:
+        print(f"BlenderFlow: redo error: {e}")
+    return None
+
+
+def _do_save():
+    try:
+        # If the file has never been saved, save_mainfile() raises because
+        # there's no path — fall back to Save As dialog in that case.
+        if bpy.data.filepath:
+            bpy.ops.wm.save_mainfile()
+        else:
+            bpy.ops.wm.save_mainfile('INVOKE_DEFAULT')
+    except Exception as e:
+        print(f"BlenderFlow: save error: {e}")
+    return None
+
+
+def _do_render_image():
+    try:
+        bpy.ops.render.render('INVOKE_DEFAULT')
+    except Exception as e:
+        print(f"BlenderFlow: render error: {e}")
+    return None
+
+
+def _find_view3d_rv3d():
+    """Return the first VIEW_3D area's region_3d, or None if not found."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for space in area.spaces:
+                if space.type == "VIEW_3D" and space.region_3d is not None:
+                    return area, space.region_3d
+    return None, None
+
+
+def _viewport_orbit(delta_deg):
+    """Rotate the 3D viewport around world Z (turntable) by delta_deg degrees."""
+    try:
+        import math
+        from mathutils import Quaternion
+        area, rv3d = _find_view3d_rv3d()
+        if rv3d is None:
+            return None
+        angle = math.radians(delta_deg)
+        rotation = Quaternion((0.0, 0.0, 1.0), angle)
+        rv3d.view_rotation = rotation @ rv3d.view_rotation
+        area.tag_redraw()
+    except Exception as e:
+        print(f"BlenderFlow: viewport_orbit error: {e}")
+    return None
+
+
+def _viewport_zoom(factor):
+    """Zoom the 3D viewport by dividing view_distance by factor (>1 = zoom in)."""
+    try:
+        area, rv3d = _find_view3d_rv3d()
+        if rv3d is None:
+            return None
+        new_dist = rv3d.view_distance / factor
+        rv3d.view_distance = max(0.01, min(1000.0, new_dist))
+        area.tag_redraw()
+    except Exception as e:
+        print(f"BlenderFlow: viewport_zoom error: {e}")
     return None
 
 
