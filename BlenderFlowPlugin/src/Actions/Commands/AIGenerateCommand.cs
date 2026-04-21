@@ -110,35 +110,57 @@ namespace Loupedeck.BlenderFlowPlugin
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
         {
             using var builder = new BitmapBuilder(imageSize);
+            Int32 w = imageSize.GetWidth();
+            Int32 h = imageSize.GetHeight();
+            Single cx = w / 2f, cy = h / 2f;
+            Single cubeR = Math.Min(w, h) * 0.22f;
+            Single thick = Math.Max(1.8f, Math.Min(w, h) / 32f);
 
             switch (_status)
             {
-                case "idle":
-                    builder.Clear(new BitmapColor(100, 0, 180));
-                    builder.DrawText("AI\nGenerate", color: BitmapColor.White);
-                    break;
                 case "waiting":
-                    builder.Clear(new BitmapColor(80, 80, 0));
-                    builder.DrawText("Waiting\n...", color: BitmapColor.White);
+                    builder.Clear(BlenderTheme.AiPurpleTint);
+                    BlenderIcons.IsoCube(builder, cx, cy, cubeR, BlenderTheme.IconDim, thick);
+                    BlenderIcons.Sparkle(builder, w * 0.22f, h * 0.26f,
+                        Math.Min(w, h) * 0.09f, BlenderTheme.AiPurple);
+                    BlenderIcons.Sparkle(builder, w * 0.80f, h * 0.78f,
+                        Math.Min(w, h) * 0.07f, BlenderTheme.AiPurple);
                     break;
+
                 case "submitting":
                 case "generating":
-                    var plugin = (BlenderFlowPlugin)this.Plugin;
-                    var pct = plugin?.AIService?.Progress ?? 0;
-                    builder.Clear(new BitmapColor(0, 100, 180));
-                    builder.DrawText($"AI\n{pct}%", color: BitmapColor.White);
-                    break;
                 case "downloading":
-                    builder.Clear(new BitmapColor(0, 140, 80));
-                    builder.DrawText("AI\n90%", color: BitmapColor.White);
+                    {
+                        builder.Clear(BlenderTheme.AiPurpleTint);
+                        var plugin = (BlenderFlowPlugin)this.Plugin;
+                        var pct = _status == "downloading" ? 90 : (plugin?.AIService?.Progress ?? 0);
+                        Int32 ringR = (Int32)(Math.Min(w, h) * 0.38f);
+                        BlenderIcons.ProgressRing(builder, (Int32)cx, (Int32)cy, ringR, pct,
+                            BlenderTheme.PanelBgDim, BlenderTheme.AiPurple, thick * 1.2f);
+                        BlenderIcons.IsoCube(builder, cx, cy, cubeR * 0.80f,
+                            BlenderTheme.Icon, thick);
+                        builder.DrawText($"{pct}%", 0, (Int32)(h * 0.74f), w, (Int32)(h * 0.22f),
+                            BlenderTheme.IconBright, 0, 0, 0, null);
+                    }
                     break;
+
                 case "failed":
-                    builder.Clear(new BitmapColor(200, 0, 0));
-                    builder.DrawText("Failed", color: BitmapColor.White);
+                    builder.Clear(BlenderTheme.PanelBg);
+                    {
+                        Single r = Math.Min(w, h) * 0.24f;
+                        Single xt = Math.Max(2f, Math.Min(w, h) / 22f);
+                        builder.DrawLine(cx - r, cy - r, cx + r, cy + r, BlenderTheme.Danger, xt);
+                        builder.DrawLine(cx - r, cy + r, cx + r, cy - r, BlenderTheme.Danger, xt);
+                    }
                     break;
-                default:
-                    builder.Clear(new BitmapColor(100, 0, 180));
-                    builder.DrawText("AI\nGenerate", color: BitmapColor.White);
+
+                default: // idle
+                    builder.Clear(BlenderTheme.AiPurpleTint);
+                    BlenderIcons.IsoCube(builder, cx, cy, cubeR, BlenderTheme.Icon, thick);
+                    BlenderIcons.Sparkle(builder, w * 0.22f, h * 0.26f,
+                        Math.Min(w, h) * 0.10f, BlenderTheme.AiPurple);
+                    BlenderIcons.Sparkle(builder, w * 0.80f, h * 0.78f,
+                        Math.Min(w, h) * 0.08f, BlenderTheme.AiPurple);
                     break;
             }
 

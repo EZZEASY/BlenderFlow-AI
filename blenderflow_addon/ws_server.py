@@ -123,6 +123,14 @@ async def handle_message(msg_type, msg, websocket):
         _run_on_main_thread(lambda p=safe_path, f=fmt: _import_model(p, f))
         return None
 
+    elif msg_type == "brush_strength":
+        delta = _parse_float(msg.get("delta"), -1.0, 1.0)
+        value = _parse_float(msg.get("value"), 0.0, 2.0)
+        if delta is None and value is None:
+            return {"type": "error", "code": "invalid_args", "message": "brush_strength needs delta or value"}
+        _run_on_main_thread(lambda d=delta, v=value: _set_brush_strength(d, v))
+        return None
+
     else:
         return {
             "type": "error",
@@ -190,6 +198,44 @@ def _get_state():
         state["vertex_count"] = len(obj.data.vertices)
         state["face_count"] = len(obj.data.polygons)
     return state
+
+
+def _parse_float(raw, lo, hi):
+    """Coerce an incoming JSON number to a float within [lo, hi], or None on reject."""
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    return max(lo, min(hi, v))
+
+
+def _set_brush_strength(delta, value):
+    """Adjust the active paint/sculpt brush's strength. Main thread."""
+    try:
+        mode = bpy.context.mode
+        ts = bpy.context.tool_settings
+        brush = None
+        if mode == "SCULPT" and ts.sculpt:
+            brush = ts.sculpt.brush
+        elif mode == "PAINT_TEXTURE" and ts.image_paint:
+            brush = ts.image_paint.brush
+        elif mode == "PAINT_VERTEX" and ts.vertex_paint:
+            brush = ts.vertex_paint.brush
+        elif mode == "PAINT_WEIGHT" and ts.weight_paint:
+            brush = ts.weight_paint.brush
+        if brush is None:
+            return None
+        if value is not None:
+            brush.strength = max(0.0, min(2.0, value))
+        elif delta is not None:
+            brush.strength = max(0.0, min(2.0, brush.strength + delta))
+    except Exception as e:
+        print(f"BlenderFlow: brush_strength error: {e}")
+    return None
 
 
 def _validate_import_path(path):

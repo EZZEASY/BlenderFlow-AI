@@ -196,6 +196,16 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             await SendAsync("import_model", new { path, format });
         }
 
+        public async Task SendBrushStrengthDeltaAsync(Single delta)
+        {
+            await SendAsync("brush_strength", new { delta });
+        }
+
+        public async Task SendBrushStrengthSetAsync(Single value)
+        {
+            await SendAsync("brush_strength", new { value });
+        }
+
         public void Dispose()
         {
             if (_disposed)

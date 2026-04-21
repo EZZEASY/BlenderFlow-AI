@@ -25,7 +25,7 @@ namespace Loupedeck.BlenderFlowPlugin
             else
             {
                 this.Plugin.ClientApplication.SendKeyboardShortcut(
-                    VirtualKeyCode.Tab, ModifierKey.Command);
+                    VirtualKeyCode.Tab, ModifierKey.Control);
                 PluginLog.Info($"Mode switch via pie menu: {_blenderMode}");
             }
         }
@@ -37,21 +37,27 @@ namespace Loupedeck.BlenderFlowPlugin
             var currentMode = plugin?.CurrentMode ?? "OBJECT";
             var isActive = currentMode.Contains(_blenderMode);
 
-            DrawModeIcon(builder, isActive);
+            Int32 w = imageSize.GetWidth();
+            Int32 h = imageSize.GetHeight();
+            DrawModeIcon(builder, w, h, isActive);
             return builder.ToImage();
         }
 
-        protected abstract void DrawModeIcon(BitmapBuilder builder, Boolean isActive);
+        protected abstract void DrawModeIcon(BitmapBuilder b, Int32 w, Int32 h, Boolean isActive);
     }
 
     public class ObjectModeCommand : BlenderModeCommandBase
     {
         public ObjectModeCommand() : base("Object Mode", "OBJECT") { }
 
-        protected override void DrawModeIcon(BitmapBuilder builder, Boolean isActive)
+        protected override void DrawModeIcon(BitmapBuilder b, Int32 w, Int32 h, Boolean isActive)
         {
-            builder.Clear(isActive ? new BitmapColor(234, 118, 0) : new BitmapColor(80, 40, 0));
-            builder.DrawText("Object\nMode", color: BitmapColor.White);
+            b.Clear(isActive ? BlenderTheme.OrangeTint : BlenderTheme.PanelBg);
+            Single cx = w / 2f, cy = h / 2f;
+            Single r = Math.Min(w, h) * 0.34f;
+            Single thick = Math.Max(2f, Math.Min(w, h) / 28f);
+            var outline = isActive ? BlenderTheme.Orange : BlenderTheme.Icon;
+            BlenderIcons.IsoCube(b, cx, cy, r, outline, thick);
         }
     }
 
@@ -59,10 +65,16 @@ namespace Loupedeck.BlenderFlowPlugin
     {
         public EditModeCommand() : base("Edit Mode", "EDIT") { }
 
-        protected override void DrawModeIcon(BitmapBuilder builder, Boolean isActive)
+        protected override void DrawModeIcon(BitmapBuilder b, Int32 w, Int32 h, Boolean isActive)
         {
-            builder.Clear(isActive ? new BitmapColor(0, 140, 200) : new BitmapColor(0, 50, 70));
-            builder.DrawText("Edit\nMode", color: BitmapColor.White);
+            b.Clear(isActive ? BlenderTheme.EditBlueTint : BlenderTheme.PanelBg);
+            Single cx = w / 2f, cy = h / 2f;
+            Single r = Math.Min(w, h) * 0.32f;
+            Single thick = Math.Max(1.5f, Math.Min(w, h) / 32f);
+            var outline = isActive ? BlenderTheme.IconBright : BlenderTheme.IconDim;
+            var dot = isActive ? BlenderTheme.Orange : BlenderTheme.EditBlue;
+            BlenderIcons.IsoCube(b, cx, cy, r, outline, thick);
+            BlenderIcons.IsoCubeVertices(b, cx, cy, r, dot, Math.Max(2.5f, r * 0.14f));
         }
     }
 
@@ -70,10 +82,14 @@ namespace Loupedeck.BlenderFlowPlugin
     {
         public SculptModeCommand() : base("Sculpt Mode", "SCULPT") { }
 
-        protected override void DrawModeIcon(BitmapBuilder builder, Boolean isActive)
+        protected override void DrawModeIcon(BitmapBuilder b, Int32 w, Int32 h, Boolean isActive)
         {
-            builder.Clear(isActive ? new BitmapColor(180, 60, 60) : new BitmapColor(60, 20, 20));
-            builder.DrawText("Sculpt\nMode", color: BitmapColor.White);
+            b.Clear(isActive ? BlenderTheme.SculptTint : BlenderTheme.PanelBg);
+            Single cx = w / 2f, cy = h / 2f + Math.Min(w, h) * 0.04f;
+            Single r = Math.Min(w, h) * 0.26f;
+            var body = isActive ? BlenderTheme.SculptRed : BlenderTheme.IconDim;
+            var hi = isActive ? BlenderTheme.IconBright : BlenderTheme.Icon;
+            BlenderIcons.Brush(b, cx, cy, r, body, hi);
         }
     }
 }
