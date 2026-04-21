@@ -232,6 +232,11 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             await SendAsync("viewport_zoom", new { factor });
         }
 
+        public async Task SendAiErrorAsync(String errorMessage)
+        {
+            await SendAsync("ai_error", new { error = errorMessage });
+        }
+
         public void Dispose()
         {
             if (_disposed)

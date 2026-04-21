@@ -112,6 +112,15 @@ async def handle_message(msg_type, msg, websocket):
         _run_on_main_thread(lambda: _show_ai_prompt(websocket))
         return None
 
+    elif msg_type == "ai_error":
+        error = msg.get("error", "Unknown error")
+        if not isinstance(error, str):
+            error = str(error)
+        # Clamp so a malicious payload can't hang Blender rendering the dialog.
+        error = error[:1000]
+        _run_on_main_thread(lambda e=error: _show_ai_error(e))
+        return None
+
     elif msg_type == "import_model":
         path = msg.get("path", "")
         fmt = msg.get("format", "gltf")
@@ -393,8 +402,43 @@ def _import_model(path, fmt):
 
 
 def _show_ai_prompt(websocket):
-    """Show AI prompt dialog in Blender. Must run on main thread."""
-    bpy.ops.blenderflow.ai_prompt_dialog('INVOKE_DEFAULT')
+    """Entry point from C# on AI-Generate keypress. Checks that the selected
+    provider is configured and redirects to the setup dialog otherwise — the
+    user should never see a silent failure on the console key.
+    """
+    try:
+        prefs = bpy.context.preferences.addons["blenderflow_addon"].preferences
+        provider = getattr(prefs, "ai_provider", "hyperrodin")
+        if provider == "hunyuan3d":
+            configured = bool(
+                getattr(prefs, "hunyuan_secret_id", "")
+                and getattr(prefs, "hunyuan_secret_key", "")
+            )
+        elif provider == "hyperrodin":
+            # Hyper3D has a shared free-trial fallback, so it's always
+            # configured enough to attempt a generation.
+            configured = True
+        else:  # tripo
+            configured = bool(getattr(prefs, "tripo_api_key", ""))
+    except (KeyError, AttributeError) as e:
+        print(f"BlenderFlow: cannot read addon preferences: {e}")
+        configured = False
+
+    if not configured:
+        bpy.ops.blenderflow.show_ai_setup('INVOKE_DEFAULT')
+        # Tell C# no prompt is coming so it resets its 'waiting' state.
+        _broadcast({"type": "ai_prompt_cancelled"})
+    else:
+        bpy.ops.blenderflow.ai_prompt_dialog('INVOKE_DEFAULT')
+    return None
+
+
+def _show_ai_error(message):
+    """Pop up a user-friendly error dialog from the main thread."""
+    try:
+        bpy.ops.blenderflow.show_ai_error('INVOKE_DEFAULT', error_message=message)
+    except Exception as e:
+        print(f"BlenderFlow: could not show error dialog: {e}")
     return None
 
 

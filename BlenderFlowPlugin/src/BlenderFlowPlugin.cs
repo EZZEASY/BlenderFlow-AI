@@ -22,6 +22,18 @@ namespace Loupedeck.BlenderFlowPlugin
         /// <summary>Fires when the AI prompt dialog was dismissed in Blender.</summary>
         public event Action OnAiPromptCancelled;
 
+        /// <summary>Periodic progress updates from a Python-side provider
+        /// (e.g. Hunyuan3D). Args: state label (submitted/running/done/failed),
+        /// progress ∈ [0, 1].</summary>
+        public event Action<String, Single> OnAiProgressChanged;
+
+        /// <summary>Fires when a Python-side provider finishes and imports
+        /// the generated mesh. Carries the imported object's name.</summary>
+        public event Action<String> OnAiCompleted;
+
+        /// <summary>Fires when a Python-side provider reports failure.</summary>
+        public event Action<String> OnAiFailed;
+
         // Keep handler references so Unload can symmetrically unsubscribe.
         private Action<String> _onMessageHandler;
         private Action _onConnectedHandler;
@@ -111,13 +123,49 @@ namespace Loupedeck.BlenderFlowPlugin
                     case "ai_prompt_response":
                         if (doc.RootElement.TryGetProperty("prompt", out var promptProp))
                         {
-                            HandleAiPrompt(promptProp.GetString());
+                            var apiKey = doc.RootElement.TryGetProperty("api_key", out var keyProp)
+                                ? keyProp.GetString()
+                                : null;
+                            HandleAiPrompt(promptProp.GetString(), apiKey);
                         }
                         break;
 
                     case "ai_prompt_cancelled":
                         PluginLog.Info("AI prompt cancelled by user");
                         OnAiPromptCancelled?.Invoke();
+                        break;
+
+                    case "ai_progress":
+                        {
+                            var state = doc.RootElement.TryGetProperty("state", out var s)
+                                ? s.GetString() : "running";
+                            Single progress = 0f;
+                            if (doc.RootElement.TryGetProperty("progress", out var pp))
+                            {
+                                try { progress = pp.GetSingle(); } catch { progress = 0f; }
+                            }
+                            OnAiProgressChanged?.Invoke(state, progress);
+                        }
+                        break;
+
+                    case "ai_completed":
+                        {
+                            var name = doc.RootElement.TryGetProperty("object_name", out var n)
+                                ? n.GetString() : "";
+                            PluginLog.Info($"AI completed (Python-side): {name}");
+                            OnAiCompleted?.Invoke(name ?? "");
+                            this.PluginEvents.RaiseEvent("aiGenerateComplete");
+                        }
+                        break;
+
+                    case "ai_failed":
+                        {
+                            var err = doc.RootElement.TryGetProperty("error", out var e)
+                                ? e.GetString() : "Unknown error";
+                            PluginLog.Warning($"AI failed (Python-side): {err}");
+                            OnAiFailed?.Invoke(err ?? "Unknown error");
+                            this.PluginEvents.RaiseEvent("aiGenerateFailed");
+                        }
                         break;
 
                     case "error":
@@ -133,7 +181,7 @@ namespace Loupedeck.BlenderFlowPlugin
             }
         }
 
-        private void HandleAiPrompt(String prompt)
+        private void HandleAiPrompt(String prompt, String apiKey)
         {
             PluginLog.Info($"AI generating: {prompt}");
 
@@ -153,18 +201,29 @@ namespace Loupedeck.BlenderFlowPlugin
                 this.PluginEvents.RaiseEvent("aiGenerateComplete");
             };
 
-            onFailed = (error) =>
+            onFailed = async (error) =>
             {
                 if (System.Threading.Interlocked.Exchange(ref settled[0], 1) != 0) return;
                 AIService.OnCompleted -= onCompleted;
                 AIService.OnFailed -= onFailed;
+                PluginLog.Warning($"AI generation failed: {error}");
+                // Surface the failure to the user via a Blender dialog —
+                // the console-key red X alone is too easy to miss.
+                try
+                {
+                    await BlenderConnection.SendAiErrorAsync(error);
+                }
+                catch (Exception ex)
+                {
+                    PluginLog.Warning(ex, "Could not forward AI error to Blender");
+                }
                 this.PluginEvents.RaiseEvent("aiGenerateFailed");
             };
 
             AIService.OnCompleted += onCompleted;
             AIService.OnFailed += onFailed;
 
-            Task.Run(async () => await AIService.GenerateModelAsync(prompt));
+            Task.Run(async () => await AIService.GenerateModelAsync(prompt, apiKey));
         }
     }
 }

@@ -19,9 +19,9 @@ namespace Loupedeck.BlenderFlowPlugin.Services
         private CancellationTokenSource _currentJob;
         private Boolean _disposed;
 
-        // TODO: Replace with actual API key management
-        // For hackathon: set TRIPO_API_KEY environment variable
-        private String ApiKey => Environment.GetEnvironmentVariable("TRIPO_API_KEY") ?? "";
+        // API key is owned by the Blender addon — stored in its AddonPreferences
+        // and shipped to us inside the ai_prompt_response message on each
+        // generation. We never persist it on the C# side.
 
         public String Status { get; private set; } = "idle";
         public Int32 Progress { get; private set; } = 0;
@@ -56,16 +56,16 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             }
         }
 
-        public async Task GenerateModelAsync(String prompt)
+        public async Task GenerateModelAsync(String prompt, String apiKey)
         {
             if (_disposed)
             {
                 return;
             }
 
-            if (String.IsNullOrEmpty(ApiKey))
+            if (String.IsNullOrEmpty(apiKey))
             {
-                OnFailed?.Invoke("API key not set. Set TRIPO_API_KEY environment variable.");
+                OnFailed?.Invoke("Tripo API key is empty — open BlenderFlow addon preferences and paste a key.");
                 return;
             }
 
@@ -86,10 +86,10 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             try
             {
                 // Step 1: Create task
-                var taskId = await CreateTaskAsync(prompt, token);
+                var taskId = await CreateTaskAsync(prompt, apiKey, token);
                 if (String.IsNullOrEmpty(taskId))
                 {
-                    OnFailed?.Invoke("Failed to create AI generation task");
+                    OnFailed?.Invoke("Failed to create generation task — the Tripo API rejected the request. Check your API key and network.");
                     return;
                 }
 
@@ -97,10 +97,10 @@ namespace Loupedeck.BlenderFlowPlugin.Services
 
                 // Step 2: Poll for completion
                 Status = "generating";
-                var modelUrl = await PollTaskAsync(taskId, token);
+                var modelUrl = await PollTaskAsync(taskId, apiKey, token);
                 if (String.IsNullOrEmpty(modelUrl))
                 {
-                    OnFailed?.Invoke("AI generation timed out or failed");
+                    OnFailed?.Invoke("Generation timed out or failed on Tripo's side. Try a simpler prompt or check status at tripo3d.ai.");
                     return;
                 }
 
@@ -112,7 +112,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 var localPath = await DownloadModelAsync(modelUrl, taskId, token);
                 if (String.IsNullOrEmpty(localPath))
                 {
-                    OnFailed?.Invoke("Failed to download generated model");
+                    OnFailed?.Invoke("Could not download the generated model — check network connectivity.");
                     return;
                 }
 
@@ -149,10 +149,10 @@ namespace Loupedeck.BlenderFlowPlugin.Services
             }
         }
 
-        private async Task<String> CreateTaskAsync(String prompt, CancellationToken token)
+        private async Task<String> CreateTaskAsync(String prompt, String apiKey, CancellationToken token)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, "https://api.tripo3d.ai/v2/openapi/task");
-            request.Headers.Add("Authorization", $"Bearer {ApiKey}");
+            request.Headers.Add("Authorization", $"Bearer {apiKey}");
             request.Content = new StringContent(
                 JsonSerializer.Serialize(new
                 {
@@ -178,7 +178,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 .GetString();
         }
 
-        private async Task<String> PollTaskAsync(String taskId, CancellationToken token)
+        private async Task<String> PollTaskAsync(String taskId, String apiKey, CancellationToken token)
         {
             var maxAttempts = 60; // 2s * 60 = 120s timeout
             var retryCount = 0;
@@ -191,7 +191,7 @@ namespace Loupedeck.BlenderFlowPlugin.Services
                 {
                     var request = new HttpRequestMessage(HttpMethod.Get,
                         $"https://api.tripo3d.ai/v2/openapi/task/{taskId}");
-                    request.Headers.Add("Authorization", $"Bearer {ApiKey}");
+                    request.Headers.Add("Authorization", $"Bearer {apiKey}");
 
                     var response = await _http.SendAsync(request, token);
 

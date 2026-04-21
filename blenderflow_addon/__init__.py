@@ -21,6 +21,7 @@ if _vendor_dir not in sys.path:
 
 from . import ws_server
 from . import commands
+from . import providers
 
 
 _server_thread = None
@@ -119,9 +120,162 @@ def stop_server():
     print("BlenderFlow: WebSocket server stopped")
 
 
+# ─── Addon Preferences (UI for AI providers) ───
+
+
+class BlenderFlowPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__  # resolves to "blenderflow_addon"
+
+    # Which provider the AI Generate button dispatches to.
+    ai_provider: bpy.props.EnumProperty(
+        name="AI Provider",
+        description="Which service to use for AI 3D generation",
+        items=[
+            ('hyperrodin', "Hyper3D Rodin",
+             "hyperhuman.deemos.com — has a shared free-trial key, good quality"),
+            ('hunyuan3d', "Hunyuan3D (Tencent)",
+             "Tencent Cloud Hunyuan3D — works from mainland China without a VPN"),
+            ('tripo', "Tripo",
+             "tripo3d.ai — good quality, but requires a VPN from some regions"),
+        ],
+        default='hyperrodin',
+    )
+
+    # ─── Tripo ──────────────────────────────────────────────────
+    tripo_api_key: bpy.props.StringProperty(
+        name="API Key",
+        description="Bearer token from tripo3d.ai",
+        default="",
+        subtype='PASSWORD',
+    )
+
+    # ─── Hunyuan3D (Tencent Cloud) ──────────────────────────────
+    hunyuan_secret_id: bpy.props.StringProperty(
+        name="SecretId",
+        description="Tencent Cloud API SecretId (console.cloud.tencent.com → CAM → API Keys)",
+        default="",
+    )
+    hunyuan_secret_key: bpy.props.StringProperty(
+        name="SecretKey",
+        description="Tencent Cloud API SecretKey",
+        default="",
+        subtype='PASSWORD',
+    )
+    hunyuan_api_type: bpy.props.EnumProperty(
+        name="Model Type",
+        description="PRO = richer output, RAPID = faster but image-only",
+        items=[
+            ('PRO', "PRO (text or image)",
+             "Higher quality. Accepts either a prompt OR an image, not both"),
+            ('RAPID', "RAPID (image only)",
+             "Faster. Requires an input image"),
+        ],
+        default='PRO',
+    )
+
+    # ─── Hyper3D Rodin ──────────────────────────────────────────
+    hyperrodin_api_key: bpy.props.StringProperty(
+        name="API Key",
+        description="Bearer token from hyperhuman.deemos.com. Leave empty to use the shared free-trial key.",
+        default="",
+        subtype='PASSWORD',
+    )
+
+    def draw(self, context):
+        layout = self.layout
+
+        # Active provider selector
+        layout.prop(self, "ai_provider", expand=True)
+        layout.separator()
+
+        if self.ai_provider == 'hunyuan3d':
+            self._draw_hunyuan(layout)
+        elif self.ai_provider == 'hyperrodin':
+            self._draw_hyperrodin(layout)
+        else:
+            self._draw_tripo(layout)
+
+    def _draw_tripo(self, layout):
+        box = layout.box()
+        box.label(text="Tripo configuration", icon='OUTLINER_OB_MESH')
+        box.prop(self, "tripo_api_key")
+
+        row = box.row(align=True)
+        row.operator(
+            "blenderflow.open_tripo_signup",
+            text="Get free API key",
+            icon='URL',
+        )
+        row.operator(
+            "blenderflow.test_provider_connection",
+            text="Test connection",
+            icon='PLAY',
+        )
+
+        if not self.tripo_api_key:
+            box.label(
+                text="No key set — AI Generate will prompt you to configure one.",
+                icon='INFO',
+            )
+
+    def _draw_hunyuan(self, layout):
+        box = layout.box()
+        box.label(text="Hunyuan3D configuration", icon='OUTLINER_OB_MESH')
+        box.prop(self, "hunyuan_api_type")
+        box.prop(self, "hunyuan_secret_id")
+        box.prop(self, "hunyuan_secret_key")
+
+        row = box.row(align=True)
+        row.operator(
+            "blenderflow.open_hunyuan_console",
+            text="Open Tencent Cloud console",
+            icon='URL',
+        )
+        row.operator(
+            "blenderflow.test_provider_connection",
+            text="Test connection",
+            icon='PLAY',
+        )
+
+        if not (self.hunyuan_secret_id and self.hunyuan_secret_key):
+            box.label(
+                text="SecretId/SecretKey missing — AI Generate will guide you.",
+                icon='INFO',
+            )
+
+    def _draw_hyperrodin(self, layout):
+        box = layout.box()
+        box.label(text="Hyper3D Rodin configuration", icon='OUTLINER_OB_MESH')
+        box.prop(self, "hyperrodin_api_key")
+
+        row = box.row(align=True)
+        row.operator(
+            "blenderflow.use_rodin_free_trial",
+            text="Use free trial key",
+            icon='SOLO_ON',
+        )
+        row.operator(
+            "blenderflow.open_hyperrodin_site",
+            text="Get your own key",
+            icon='URL',
+        )
+        row.operator(
+            "blenderflow.test_provider_connection",
+            text="Test connection",
+            icon='PLAY',
+        )
+
+        if not self.hyperrodin_api_key:
+            box.label(
+                text="Empty = shared trial key (rate-limited). Get your own for sustained use.",
+                icon='INFO',
+            )
+
+
 # ─── 注册 ───
 
 _classes = (
+    BlenderFlowPreferences,
     BLENDERFLOW_OT_start_server,
     BLENDERFLOW_OT_stop_server,
     BLENDERFLOW_PT_panel,
@@ -130,9 +284,10 @@ _classes = (
 
 def register():
     # Reload submodules on every register() so disable+enable picks up
-    # edits to ws_server.py / commands.py without a full Blender restart.
-    # The top-level `from . import ws_server` only runs once per Python
-    # process — Blender's addon loader reuses the cached module.
+    # edits without a full Blender restart. Order matters: providers is
+    # imported by commands, so reload providers *first* — otherwise
+    # commands keeps a stale reference to the old providers module.
+    importlib.reload(providers)
     importlib.reload(ws_server)
     importlib.reload(commands)
     for cls in _classes:

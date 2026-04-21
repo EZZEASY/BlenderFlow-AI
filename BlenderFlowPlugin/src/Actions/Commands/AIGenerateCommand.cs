@@ -7,6 +7,7 @@ namespace Loupedeck.BlenderFlowPlugin
     public class AIGenerateCommand : PluginDynamicCommand
     {
         private String _status = "idle";
+        private Int32 _progressPercent = 0;
 
         public AIGenerateCommand()
             : base(
@@ -38,10 +39,15 @@ namespace Loupedeck.BlenderFlowPlugin
                 return;
             }
 
-            // Subscribe to AI events
+            // Tripo uses the C#-side AIService; Python-side providers
+            // (Hunyuan3D) stream progress over WS instead. Subscribe to both
+            // sources so the console icon reflects whichever path runs.
             plugin.AIService.OnProgressChanged += OnProgressChanged;
             plugin.AIService.OnCompleted += OnCompleted;
             plugin.AIService.OnFailed += OnFailed;
+            plugin.OnAiProgressChanged += OnPythonProgressChanged;
+            plugin.OnAiCompleted += OnPythonCompleted;
+            plugin.OnAiFailed += OnFailed;
 
             // Listen for prompt dialog dismissal — narrower than OnBlenderStateChanged
             // so unrelated mode changes during waiting don't abort the wait.
@@ -68,12 +74,36 @@ namespace Loupedeck.BlenderFlowPlugin
         private void OnProgressChanged(String status, Int32 percent)
         {
             _status = status;
+            _progressPercent = percent;
+            this.ActionImageChanged();
+        }
+
+        // Python-side providers emit a (state, 0..1) progress tuple.
+        private void OnPythonProgressChanged(String state, Single progress01)
+        {
+            _progressPercent = (Int32)Math.Round(Math.Clamp(progress01, 0f, 1f) * 100f);
+            _status = state switch
+            {
+                "submitted" => "submitting",
+                "done"      => "downloading",
+                "failed"    => "failed",
+                _           => "generating",
+            };
+            this.ActionImageChanged();
+        }
+
+        private void OnPythonCompleted(String objectName)
+        {
+            _status = "idle";
+            _progressPercent = 0;
+            UnsubscribeEvents();
             this.ActionImageChanged();
         }
 
         private void OnCompleted(String path)
         {
             _status = "idle";
+            _progressPercent = 0;
             UnsubscribeEvents();
             this.ActionImageChanged();
         }
@@ -104,6 +134,9 @@ namespace Loupedeck.BlenderFlowPlugin
                 plugin.AIService.OnCompleted -= OnCompleted;
                 plugin.AIService.OnFailed -= OnFailed;
             }
+            plugin.OnAiProgressChanged -= OnPythonProgressChanged;
+            plugin.OnAiCompleted -= OnPythonCompleted;
+            plugin.OnAiFailed -= OnFailed;
             plugin.OnAiPromptCancelled -= OnPromptCancelled;
         }
 
@@ -133,7 +166,17 @@ namespace Loupedeck.BlenderFlowPlugin
                     {
                         builder.Clear(BlenderTheme.AiPurpleTint);
                         var plugin = (BlenderFlowPlugin)this.Plugin;
-                        var pct = _status == "downloading" ? 90 : (plugin?.AIService?.Progress ?? 0);
+                        // Prefer the per-event _progressPercent so Python-side
+                        // providers render too; fall back to AIService.Progress
+                        // for the Tripo code path, and treat 'downloading' as
+                        // ~90% if nothing reported.
+                        var pct = _progressPercent;
+                        if (pct == 0)
+                        {
+                            pct = _status == "downloading"
+                                ? 90
+                                : (plugin?.AIService?.Progress ?? 0);
+                        }
                         Int32 ringR = (Int32)(Math.Min(w, h) * 0.38f);
                         BlenderIcons.ProgressRing(builder, (Int32)cx, (Int32)cy, ringR, pct,
                             BlenderTheme.PanelBgDim, BlenderTheme.AiPurple, thick * 1.2f);
