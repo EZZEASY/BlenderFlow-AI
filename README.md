@@ -49,12 +49,16 @@ reached Blender.
 
 ## Requirements
 
-- macOS (currently the only tested platform; Windows should work but is
-  unverified)
+- **macOS (recommended)** — the only platform actively tested. Windows
+  builds and most actions have been wired up to be cross-platform but are
+  not routinely exercised; if you're on Windows, expect rough edges and
+  please file issues.
 - [Blender](https://www.blender.org/) 4.1 or newer
 - [Logi Options+](https://www.logitech.com/software/logi-options-plus.html)
   with the Logi Plugin Service
-- [.NET 8 SDK](https://dotnet.microsoft.com/) — on macOS: `brew install dotnet@8`
+- [.NET 8 SDK](https://dotnet.microsoft.com/)
+  - macOS: `brew install dotnet@8`
+  - Windows: installer from dotnet.microsoft.com
 - A paired Logitech MX Creative Console
 
 ## Install
@@ -62,10 +66,23 @@ reached Blender.
 ```bash
 git clone https://github.com/EZZEASY/BlenderFlow-AI.git
 cd BlenderFlow-AI
+```
+
+Then run the installer for your platform:
+
+**macOS:**
+```bash
 bash setup.sh
 ```
 
-`setup.sh` does three things:
+**Windows** (PowerShell, with Developer Mode enabled under
+Settings → Privacy & Security → For developers — needed for the
+symlink step):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Either installer does three things:
 
 1. Builds the C# plugin with `dotnet build`
 2. Registers it with Logi Plugin Service via a `.link` file (dev-mode
