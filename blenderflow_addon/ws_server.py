@@ -186,15 +186,84 @@ def _run_on_main_thread(func):
     bpy.app.timers.register(func, first_interval=0)
 
 
+_MODE_COMPATIBLE_TYPES = {
+    "EDIT":          {"MESH", "CURVE", "SURFACE", "META", "FONT", "LATTICE", "ARMATURE"},
+    "SCULPT":        {"MESH"},
+    "TEXTURE_PAINT": {"MESH"},
+    "VERTEX_PAINT":  {"MESH"},
+    "WEIGHT_PAINT":  {"MESH"},
+    "POSE":          {"ARMATURE"},
+    "PARTICLE_EDIT": {"MESH"},
+    "OBJECT":        None,  # always allowed
+}
+
+
 def _set_mode(mode):
-    """Switch Blender mode. Must run on main thread."""
+    """Switch Blender mode. Must run on main thread.
+
+    If no object is active or the active object's type is incompatible with
+    the target mode, try to pick a suitable object instead of silently
+    dropping the request — the most common "I pressed the key and nothing
+    happened" failure is an empty selection.
+    """
     try:
-        if bpy.context.active_object:
-            bpy.ops.object.mode_set(mode=mode)
-            _broadcast_mode_change(mode)
+        obj = bpy.context.view_layer.objects.active
+        compatible = _MODE_COMPATIBLE_TYPES.get(mode)
+
+        # If current active object won't accept this mode, try another.
+        if obj is None or (compatible is not None and obj.type not in compatible):
+            picked = None
+            if compatible:
+                for o in bpy.context.view_layer.objects:
+                    if o.type in compatible and o.visible_get():
+                        picked = o
+                        break
+            if picked is None:
+                why = "no object in scene" if obj is None else f"active is {obj.type}"
+                _status_flash(f"BlenderFlow: can't switch to {mode} — {why}")
+                print(f"BlenderFlow: set_mode({mode}) skipped — {why}")
+                return None
+            bpy.context.view_layer.objects.active = picked
+            try:
+                picked.select_set(True)
+            except Exception:
+                pass
+            obj = picked
+
+        bpy.ops.object.mode_set(mode=mode)
+        _broadcast_mode_change(mode)
     except Exception as e:
+        _status_flash(f"BlenderFlow: mode_set({mode}) failed — {e}")
         print(f"BlenderFlow: mode_set error: {e}")
     return None
+
+
+def _status_flash(msg: str, hold_seconds: float = 3.0):
+    """Show `msg` in the bottom status bar for a few seconds, then clear.
+
+    Gives invisible-failure modes (no active object, incompatible type) a
+    user-visible breadcrumb without needing the system terminal.
+    """
+    try:
+        wm = bpy.context.window_manager
+        if not wm:
+            return
+        for w in wm.windows:
+            if w.workspace:
+                w.workspace.status_text_set(msg)
+
+        def clear():
+            try:
+                for w in bpy.context.window_manager.windows:
+                    if w.workspace:
+                        w.workspace.status_text_set(None)
+            except Exception:
+                pass
+            return None
+
+        bpy.app.timers.register(clear, first_interval=hold_seconds)
+    except Exception:
+        pass
 
 
 def _run_tool(op):

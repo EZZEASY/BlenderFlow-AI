@@ -92,4 +92,24 @@ namespace Loupedeck.BlenderFlowPlugin
             BlenderIcons.Brush(b, cx, cy, r, body, hi);
         }
     }
+
+    public class TexturePaintModeCommand : BlenderModeCommandBase
+    {
+        public TexturePaintModeCommand() : base("Texture Paint Mode", "TEXTURE_PAINT") { }
+
+        protected override void DrawModeIcon(BitmapBuilder b, Int32 w, Int32 h, Boolean isActive)
+        {
+            b.Clear(isActive ? BlenderTheme.PaintTint : BlenderTheme.PanelBg);
+            Single cx = w / 2f, cy = h / 2f + Math.Min(w, h) * 0.04f;
+            Single r = Math.Min(w, h) * 0.26f;
+            var body = isActive ? BlenderTheme.PaintGold : BlenderTheme.IconDim;
+            var hi = isActive ? BlenderTheme.IconBright : BlenderTheme.Icon;
+            BlenderIcons.Brush(b, cx, cy, r, body, hi);
+            // Palette dots (axis RGB) to differentiate from Sculpt's plain brush
+            Single dotR = Math.Max(2.5f, Math.Min(w, h) * 0.045f);
+            b.FillCircle(w * 0.24f, h * 0.30f, dotR, BlenderTheme.AxisX);
+            b.FillCircle(w * 0.14f, h * 0.48f, dotR, BlenderTheme.AxisY);
+            b.FillCircle(w * 0.22f, h * 0.66f, dotR, BlenderTheme.AxisZ);
+        }
+    }
 }

@@ -19,6 +19,8 @@ namespace Loupedeck.BlenderFlowPlugin
         public static readonly BitmapColor EditBlueTint = new BitmapColor(20, 42, 72);
         public static readonly BitmapColor SculptRed = new BitmapColor(206, 96, 96);     // sculpt pink/red
         public static readonly BitmapColor SculptTint = new BitmapColor(60, 24, 24);
+        public static readonly BitmapColor PaintGold = new BitmapColor(218, 170, 70);    // texture-paint warm gold
+        public static readonly BitmapColor PaintTint = new BitmapColor(58, 42, 14);
         public static readonly BitmapColor AiPurple = new BitmapColor(168, 116, 216);    // AI accent
         public static readonly BitmapColor AiPurpleTint = new BitmapColor(44, 28, 62);
 
