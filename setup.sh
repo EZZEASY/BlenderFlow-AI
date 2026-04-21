@@ -1,7 +1,8 @@
 #!/bin/bash
-# BlenderFlow AI — 一键安装脚本
-# 编译 C# 插件 + 链接 Blender Addon
-# Python 依赖由 Addon 在 Blender 里自动安装
+# BlenderFlow AI — one-shot installer.
+# Builds the C# plugin and links the Blender addon into their respective
+# app-data directories. Python deps are installed on demand by the addon
+# the first time it starts inside Blender.
 
 set -e
 
@@ -9,38 +10,38 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ADDON_NAME="blenderflow_addon"
 
 echo "========================================="
-echo "  BlenderFlow AI 安装脚本"
+echo "  BlenderFlow AI installer"
 echo "========================================="
 echo ""
 
-# ─── 编译 C# 插件 ───
-echo "▶ 编译 BlenderFlow 插件..."
+# ─── Build the C# plugin ───
+echo "▶ Building BlenderFlow plugin..."
 export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
 export PATH="$DOTNET_ROOT:$HOME/.dotnet/tools:$PATH"
 
 if ! command -v dotnet &>/dev/null; then
-    echo "❌ 未找到 .NET SDK，请先运行: brew install dotnet@8"
+    echo "❌ .NET SDK not found. Install it first: brew install dotnet@8"
     exit 1
 fi
 
 cd "$SCRIPT_DIR/BlenderFlowPlugin"
 dotnet build --configuration Debug --verbosity quiet
-echo "  ✅ 插件编译成功"
+echo "  ✅ Plugin built"
 
-# ─── 注册到 Plugin Service ───
+# ─── Register with Logi Plugin Service ───
 echo ""
-echo "▶ 注册插件到 Logi Plugin Service..."
+echo "▶ Registering plugin with Logi Plugin Service..."
 PLUGIN_DIR="$HOME/Library/Application Support/Logi/LogiPluginService/Plugins"
 mkdir -p "$PLUGIN_DIR"
 echo "$SCRIPT_DIR/BlenderFlowPlugin/bin/Debug/" > "$PLUGIN_DIR/BlenderFlowPlugin.link"
-echo "  ✅ 插件已注册"
+echo "  ✅ Plugin registered"
 
-# ─── 链接 Blender Addon ───
+# ─── Link the Blender addon ───
 echo ""
-echo "▶ 安装 Blender Addon..."
+echo "▶ Installing Blender addon..."
 BLENDER_APP="/Applications/Blender.app"
 if [ ! -d "$BLENDER_APP" ]; then
-    echo "❌ 未找到 Blender.app，请从 blender.org 下载安装"
+    echo "❌ Blender.app not found. Install it from blender.org"
     exit 1
 fi
 
@@ -50,28 +51,30 @@ ADDON_DST="$HOME/Library/Application Support/Blender/$BLENDER_VERSION/scripts/ad
 mkdir -p "$(dirname "$ADDON_DST")"
 rm -rf "$ADDON_DST" 2>/dev/null
 ln -sf "$SCRIPT_DIR/$ADDON_NAME" "$ADDON_DST"
-echo "  ✅ Addon 已链接 (开发模式，改代码后重启 Blender 即生效)"
+echo "  ✅ Addon symlinked (dev mode — reload the addon in Blender to pick up edits)"
 
-# ─── 重载 Plugin Service ───
+# ─── Reload Plugin Service ───
 echo ""
-echo "▶ 重载 Logi Plugin Service..."
+echo "▶ Reloading Logi Plugin Service..."
 open "loupedeck:plugin/BlenderFlow/reload" 2>/dev/null || true
-echo "  ✅ 重载命令已发送"
+echo "  ✅ Reload signal sent"
 
-# ─── 完成 ───
+# ─── Done ───
 echo ""
 echo "========================================="
-echo "  ✅ 安装完成！"
+echo "  ✅ Install complete"
 echo "========================================="
 echo ""
-echo "下一步："
-echo "  1. 打开 Blender → Edit → Preferences → Add-ons"
-echo "     搜索 'BlenderFlow' → 勾选启用"
-echo "     (首次启用会自动安装 Python 依赖，需等几秒)"
+echo "Next steps:"
+echo "  1. Open Blender → Edit → Preferences → Add-ons"
+echo "     Search 'BlenderFlow' → enable the checkbox"
+echo "     (first enable installs Python deps; give it a few seconds)"
 echo ""
-echo "  2. 打开 Logi Options+ → 设备定制 → All Actions"
-echo "     找到 BlenderFlow AI → 拖到按键上"
+echo "  2. Open Logi Options+ → device customization → All Actions"
+echo "     Find BlenderFlow AI → drag actions onto keys"
 echo ""
-echo "  3. 如需 AI 生成功能："
-echo "     export TRIPO_API_KEY=\"你的key\""
+echo "  3. For AI 3D generation: configure a provider in the addon's"
+echo "     preferences (BlenderFlow ships with Hyper3D Rodin enabled by"
+echo "     default, using a shared free-trial key so it works out of the"
+echo "     box)."
 echo ""
